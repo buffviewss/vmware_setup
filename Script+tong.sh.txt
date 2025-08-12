@@ -1,0 +1,327 @@
+#!/bin/bash
+
+# Script này sẽ ngẫu nhiên chọn và thực thi MỘT trong các tác vụ thay đổi
+# fingerprint (WebGL, Canvas, Audio, ClientRects) với tỷ lệ được xác định trước.
+# Mục đích là tạo ra sự thay đổi đa dạng hơn và tránh việc thay đổi tất cả
+# các thông số cùng một lúc.
+
+set -e
+
+echo "[FP-MAX] Fingerprint Randomizer - Chế độ lựa chọn ngẫu nhiên theo tỷ lệ"
+echo "------------------------------------------------------------------"
+
+# ==============================================================================
+# HÀM CHO TỪNG TÁC VỤ
+# Mỗi khối code được đặt trong một hàm riêng.
+# ==============================================================================
+# Tác vụ: Thay đổi độ phân giải màn hình
+change_resolution() {
+    echo "=> Tác vụ bắt buộc: Thay đổi Độ phân giải màn hình"
+
+    # Kiểm tra xem môi trường đồ họa (X session) có đang chạy không.
+    if [[ -z "$DISPLAY" ]]; then
+        echo "[Resolution] Không tìm thấy môi trường đồ họa. Bỏ qua."
+        return
+    fi
+
+    # Đảm bảo xrandr đã được cài đặt
+    sudo apt-get update > /dev/null
+    sudo apt-get install -y x11-xserver-utils > /dev/null
+
+    # Danh sách các độ phân giải mục tiêu
+    local resolutions=(
+        "1920x1440" "1920x1200" "1920x1080" "1856x1392"
+        "1792x1344" "1680x1050" "1600x1200"
+    )
+
+    # Lấy tên màn hình đang kết nối
+    local display_output
+    display_output=$(xrandr --query | grep ' connected' | awk '{print $1}' | head -n 1)
+
+    if [[ -z "$display_output" ]]; then
+        echo "[Resolution] Không tìm thấy màn hình nào đang kết nối. Bỏ qua."
+        return
+    fi
+
+    # Chọn ngẫu nhiên một độ phân giải
+    local random_resolution=${resolutions[$RANDOM % ${#resolutions[@]}]}
+    echo "[Resolution] Đang thử đặt độ phân giải thành $random_resolution cho màn hình $display_output..."
+    xrandr --output "$display_output" --mode "$random_resolution" || true
+    echo "[Resolution] Đã thực hiện xong."
+}
+# Tác vụ 1: WebGL (Tỷ lệ: 5%)
+# Thay đổi GPU ID, VRAM, Mesa và Vulkan config.
+change_webgl() {
+    echo "=> Đang chạy tác vụ: WebGL (GPU + Mesa + Vulkan)"
+    
+    # --- GPU ---
+    VMX_FILE="$HOME/.vmware/your_vm.vmx"
+    GPU_VENDOR=("0x10de" "0x8086" "0x1002" "0x1414" "0x1043")
+    GPU_DEVICE=("0x1eb8" "0x1d01" "0x6810" "0x0000" "0x6780")
+    GPU_VRAM=("134217728" "67108864" "268435456" "536870912")
+    RANDOM_VENDOR=${GPU_VENDOR[$RANDOM % ${#GPU_VENDOR[@]}]}
+    RANDOM_DEVICE=${GPU_DEVICE[$RANDOM % ${#GPU_DEVICE[@]}]}
+    RANDOM_VRAM=${GPU_VRAM[$RANDOM % ${#GPU_VRAM[@]}]}
+    
+    mkdir -p "$(dirname "$VMX_FILE")"
+    cat > "$VMX_FILE" <<EOF
+svga.present = "TRUE"
+svga.vramSize = "$RANDOM_VRAM"
+svga.vendorID = "$RANDOM_VENDOR"
+svga.deviceID = "$RANDOM_DEVICE"
+EOF
+    echo "[WebGL] GPU ID/VRAM đã thay đổi: $RANDOM_VENDOR / $RANDOM_DEVICE / $RANDOM_VRAM"
+
+    # --- Mesa ---
+    sudo add-apt-repository -y ppa:kisak/kisak-mesa
+    sudo apt update
+    sudo apt install -y mesa-utils mesa-vulkan-drivers
+    [ -f "$HOME/.drirc" ] && rm -f "$HOME/.drirc"
+    cat > "$HOME/.drirc" <<EOF
+<driconf>
+  <device>
+    <application name="all">
+      <option name="disable_glsl_line_smooth" value="$(shuf -e true false -n1)"/>
+      <option name="vblank_mode" value="$(shuf -e 0 1 2 -n1)"/>
+      <option name="mesa_glthread" value="$(shuf -e true false -n1)"/>
+    </application>
+  </device>
+</driconf>
+EOF
+    echo "[WebGL] Cấu hình Mesa đã được áp dụng."
+
+    # --- Vulkan ---
+    mkdir -p ~/.config/vulkan/implicit_layer.d
+    cat > ~/.config/vulkan/implicit_layer.d/fp_random.json <<EOF
+{
+    "file_format_version": "1.0.0",
+    "layer": {
+        "name": "FP_RANDOM_LAYER",
+        "type": "INSTANCE",
+        "library_path": "libVkLayer_random.so",
+        "api_version": "1.2.154",
+        "implementation_version": 1,
+        "description": "Random Vulkan Capabilities"
+    }
+}
+EOF
+    echo "[WebGL] Cấu hình Vulkan đã được áp dụng."
+    echo "[HOÀN TẤT] Tác vụ WebGL đã thực hiện xong."
+}
+
+# ------------------------------------------------------------------------------
+
+# Tác vụ 2: Canvas (Tỷ lệ: 33%)
+# Thay đổi DPI và Font.
+change_canvas() {
+    echo "=> Đang chạy tác vụ: Canvas (DPI + Fonts)"
+
+    # --- DPI ---
+    MIN=1.01
+    MAX=1.45
+    RANDOM_DPI=$(awk -v min=$MIN -v max=$MAX 'BEGIN{srand(); printf "%.2f", min+rand()*(max-min)}')
+    gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
+    echo "[Canvas] DPI scaling đã thay đổi thành: $RANDOM_DPI"
+
+    # --- Fonts ---
+    FONT_DIR="$HOME/.local/share/fonts"
+    mkdir -p "$FONT_DIR"
+    echo "[Fonts] Đang cài đặt các font dự phòng Noto..."
+    sudo apt-get update
+    sudo apt-get install -y fontconfig subversion fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+
+    FONTS_LIST=("Roboto" "Open Sans" "Lato" "Montserrat" "Source Sans Pro" "Merriweather" "Noto Sans" "Noto Serif" "Ubuntu" "Fira Sans")
+    RANDOM_FONT=${FONTS_LIST[$RANDOM % ${#FONTS_LIST[@]}]}
+    echo "[Fonts] Font chính được chọn: $RANDOM_FONT"
+
+    if ! fc-list | grep -qi "$RANDOM_FONT"; then
+        echo "[Fonts] Đang tải font chính..."
+        FONT_URL="https://github.com/google/fonts/trunk/ofl/$(echo "$RANDOM_FONT" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+        svn export --force "$FONT_URL" "$FONT_DIR/$RANDOM_FONT" || true
+        fc-cache -fv >/dev/null
+    fi
+
+    mkdir -p ~/.config/fontconfig
+    cat > ~/.config/fontconfig/fonts.conf <<EOF
+<?xml version='1.0'?>
+<!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
+<fontconfig>
+    <alias><family>sans-serif</family><prefer><family>$RANDOM_FONT</family><family>Noto Sans</family><family>DejaVu Sans</family><family>Noto Color Emoji</family><family>Noto Sans Symbols</family><family>Noto Sans Symbols 2</family><family>Noto Sans CJK JP</family></prefer></alias>
+    <alias><family>serif</family><prefer><family>$RANDOM_FONT</family><family>Noto Serif</family><family>DejaVu Serif</family><family>Noto Color Emoji</family><family>Noto Sans CJK JP</family></prefer></alias>
+    <alias><family>monospace</family><prefer><family>Noto Sans Mono</family><family>DejaVu Sans Mono</family><family>Noto Color Emoji</family><family>Noto Sans CJK JP</family></prefer></alias>
+</fontconfig>
+EOF
+    fc-cache -fv >/dev/null
+    echo "[Canvas] Font chính là '$RANDOM_FONT' với các font phụ Noto đã được cấu hình."
+    echo "[HOÀN TẤT] Tác vụ Canvas đã thực hiện xong."
+}
+
+# ------------------------------------------------------------------------------
+
+# Tác vụ 3.1: Audio Phiên bản 1 (Tỷ lệ: 16%)
+# Thay đổi Driver và DSP plugin qua PulseAudio.
+change_audio1() {
+    echo "=> Đang chạy tác vụ: Audio v1 (PulseAudio + LADSPA)"
+    
+    sudo apt install -y pulseaudio-utils sox libsox-fmt-all ladspa-sdk
+
+    if systemctl --user is-active pipewire >/dev/null 2>&1; then
+        systemctl --user stop pipewire pipewire-pulse wireplumber || true
+    elif command -v pulseaudio >/dev/null 2>&1; then
+        pulseaudio -k || true
+    fi
+
+    sudo modprobe -r snd_ens1371 snd_hda_intel snd_usb_audio || true
+    AUDIO_DRIVERS=("snd_ens1371" "snd_hda_intel" "snd_usb_audio")
+    TARGET_AUDIO=${AUDIO_DRIVERS[$RANDOM % ${#AUDIO_DRIVERS[@]}]}
+    sudo modprobe "$TARGET_AUDIO" || true
+
+    DSP_PLUGINS=("noise" "equalizer_1901" "reverb_1433")
+    DSP_PLUGIN=${DSP_PLUGINS[$RANDOM % ${#DSP_PLUGINS[@]}]}
+    FILTER_LEVEL=$(shuf -i 1-3 -n1)
+
+    mkdir -p ~/.config/pulse
+    cat > ~/.config/pulse/default.pa <<EOF
+.include /etc/pulse/default.pa
+load-module module-ladspa-sink sink_name=dsp_out plugin=$DSP_PLUGIN source_port=output control=$FILTER_LEVEL
+set-default-sink dsp_out
+EOF
+
+    if systemctl --user is-active pipewire >/dev/null 2>&1; then
+        systemctl --user start pipewire wireplumber pipewire-pulse
+    elif command -v pulseaudio >/dev/null 2>&1; then
+        pulseaudio --start
+    fi
+
+    echo "[Audio] Driver: $TARGET_AUDIO | DSP: $DSP_PLUGIN | Level: $FILTER_LEVEL"
+    echo "[HOÀN TẤT] Tác vụ Audio v1 đã thực hiện xong."
+}
+
+# ------------------------------------------------------------------------------
+
+# Tác vụ 3.2: Audio Phiên bản 2 (Tỷ lệ: 16%)
+# Thay đổi Driver và áp dụng bộ lọc qua PipeWire.
+change_audio2() {
+    echo "=> Đang chạy tác vụ: Audio v2 (Kernel Driver + PipeWire Filter)"
+
+    echo "[+] Giai đoạn 1: Thay đổi Trình điều khiển Âm thanh Kernel..."
+    if systemctl --user is-active --quiet pipewire; then
+        systemctl --user stop pipewire pipewire-pulse wireplumber || true
+    elif command -v pulseaudio >/dev/null 2>&1; then
+        pulseaudio -k || true
+    fi
+    sleep 2
+
+    sudo modprobe -r snd_ens1371 snd_hda_intel snd_usb_audio || true
+    AUDIO_DRIVERS=("snd_ens1371" "snd_hda_intel" "snd_usb_audio")
+    TARGET_AUDIO=${AUDIO_DRIVERS[$RANDOM % ${#AUDIO_DRIVERS[@]}]}
+    echo "    -> Đang tải module được chọn: $TARGET_AUDIO"
+    sudo modprobe "$TARGET_AUDIO" || true
+    sleep 2
+
+    echo "[+] Giai đoạn 2: Áp dụng Bộ lọc PipeWire Native..."
+    sudo apt-get install -y pipewire-audio
+    if command -v pipewire >/dev/null 2>&1; then
+        systemctl --user start pipewire wireplumber pipewire-pulse
+    else
+        pulseaudio --start
+    fi
+    sleep 3
+    
+    # Tạo sink ảo và áp dụng bộ lọc EQ
+    pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=ultimate_dsp_out media.class=Audio/Sink }' >/dev/null 2>&1
+    sleep 1
+    DEFAULT_SINK_ID=$(wpctl status | grep 'ultimate_dsp_out' | awk '{print $1}' | tr -d '.*')
+    if [[ -n "$DEFAULT_SINK_ID" ]]; then
+        wpctl set-default "$DEFAULT_SINK_ID"
+    fi
+
+    FILTER_GAIN=$(shuf -i -5-5 -n1)
+    FILTER_FREQ=$(shuf -i 1-20 -n1)00
+    pw-cli load-module libpipewire-module-filter-chain '{
+        node.name = "eq_filter_chain"
+        filter.graph = { nodes = [ { type = builtin, name = eq, label = equalizer_10_band, config = { bands = [ { freq = '"$FILTER_FREQ"', gain = '"$FILTER_GAIN"' } ] } } ] }
+    }' >/dev/null 2>&1
+
+    echo "Driver Kernel đã áp dụng: $TARGET_AUDIO"
+    echo "Bộ lọc PipeWire EQ: Gain $FILTER_GAIN dB tại $FILTER_FREQ Hz"
+    echo "[HOÀN TẤT] Tác vụ Audio v2 đã thực hiện xong."
+}
+
+# ------------------------------------------------------------------------------
+
+# Tác vụ 4: ClientRects (Tỷ lệ: 30%)
+# Thay đổi các thông số kết xuất font (rendering).
+change_clientrects() {
+    echo "=> Đang chạy tác vụ: ClientRects (Font Rendering)"
+
+    HINTING_OPTIONS=("true" "false")
+    ANTIALIAS_OPTIONS=("true" "false")
+    HINT_STYLES=("hintslight" "hintsmedium" "hintsfull")
+    SUBPIXEL_OPTIONS=("rgb" "bgr" "vrgb" "vbgr" "none")
+    LCD_FILTERS=("lcddefault" "lcdlight" "lcdlegacy")
+
+    RANDOM_HINTING=${HINTING_OPTIONS[$RANDOM % ${#HINTING_OPTIONS[@]}]}
+    RANDOM_ANTIALIAS=${ANTIALIAS_OPTIONS[$RANDOM % ${#ANTIALIAS_OPTIONS[@]}]}
+    RANDOM_HINT_STYLE=${HINT_STYLES[$RANDOM % ${#HINT_STYLES[@]}]}
+    RANDOM_SUBPIXEL=${SUBPIXEL_OPTIONS[$RANDOM % ${#SUBPIXEL_OPTIONS[@]}]}
+    RANDOM_LCD_FILTER=${LCD_FILTERS[$RANDOM % ${#LCD_FILTERS[@]}]}
+    RANDOM_LETTERSPACING=$(awk 'BEGIN{srand(); printf "%.2f", -0.5 + rand() * 1.5}')
+
+    mkdir -p ~/.config/fontconfig
+    cat > ~/.config/fontconfig/render.conf <<EOF
+<?xml version='1.0'?>
+<!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
+<fontconfig>
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>$RANDOM_ANTIALIAS</bool></edit>
+    <edit name="hinting" mode="assign"><bool>$RANDOM_HINTING</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>$RANDOM_HINT_STYLE</const></edit>
+    <edit name="rgba" mode="assign"><const>$RANDOM_SUBPIXEL</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>$RANDOM_LCD_FILTER</const></edit>
+    <edit name="letterspace" mode="assign"><double>$RANDOM_LETTERSPACING</double></edit>
+  </match>
+</fontconfig>
+EOF
+
+    fc-cache -fv >/dev/null
+    echo "[ClientRects] Các thông số kết xuất đã được ngẫu nhiên hóa."
+    echo "  - Hinting: $RANDOM_HINTING ($RANDOM_HINT_STYLE), Antialias: $RANDOM_ANTIALIAS, Subpixel: $RANDOM_SUBPIXEL, Filter: $RANDOM_LCD_FILTER, Letterspace: $RANDOM_LETTERSPACING"
+    echo "[HOÀN TẤT] Tác vụ ClientRects đã thực hiện xong."
+}
+
+# ==============================================================================
+# LOGIC CHÍNH: LỰA CHỌN VÀ THỰC THI NGẪU NHIÊN
+# ==============================================================================
+change_resolution
+
+echo "------------------------------------------------------------------"
+# Tạo một số ngẫu nhiên từ 1 đến 100.
+CHOICE=$(( (RANDOM % 100) + 1 ))
+
+# Phân chia các khoảng giá trị dựa trên tỷ lệ phần trăm:
+# 1-5      (5%)  : WebGL
+# 6-38     (33%) : Canvas
+# 39-54    (16%) : Audio1
+# 55-70    (16%) : Audio2
+# 71-100   (30%) : ClientRects
+
+if [[ $CHOICE -le 5 ]]; then
+    # Tỷ lệ 5%
+    change_webgl
+elif [[ $CHOICE -le 38 ]]; then
+    # Tỷ lệ 33% (5 + 33)
+    change_canvas
+elif [[ $CHOICE -le 54 ]]; then
+    # Tỷ lệ 16% (38 + 16)
+    change_audio1
+elif [[ $CHOICE -le 70 ]]; then
+    # Tỷ lệ 16% (54 + 16)
+    change_audio2
+else
+    # Tỷ lệ 30% (phần còn lại)
+    change_clientrects
+fi
+
+echo "------------------------------------------------------------------"
+echo "Script đã hoàn tất. Hãy khởi động lại (reboot) nếu cần để áp dụng triệt để các thay đổi."
