@@ -1,75 +1,84 @@
+
 #!/bin/bash
 set -e
 
 echo "[FP-MAX] Fingerprint Randomizer 10/10 – Ubuntu/Lubuntu 24.04"
 
 # =============================
-# 1. WebGL – GPU + Mesa + Vulkan
-# =============================
-VMX_FILE="$HOME/.vmware/your_vm.vmx"
-GPU_VENDOR=("0x10de" "0x8086" "0x1002" "0x1414" "0x1043")
-GPU_DEVICE=("0x1eb8" "0x1d01" "0x6810" "0x0000" "0x6780")
-GPU_VRAM=("134217728" "67108864" "268435456" "536870912")
-RANDOM_VENDOR=${GPU_VENDOR[$RANDOM % ${#GPU_VENDOR[@]}]}
-RANDOM_DEVICE=${GPU_DEVICE[$RANDOM % ${#GPU_DEVICE[@]}]}
-RANDOM_VRAM=${GPU_VRAM[$RANDOM % ${#GPU_VRAM[@]}]}
+# # 1. WebGL – GPU + Mesa + Vulkan
+# # =============================
+# VMX_FILE="$HOME/.vmware/your_vm.vmx"
+# GPU_VENDOR=("0x10de" "0x8086" "0x1002" "0x1414" "0x1043")
+# GPU_DEVICE=("0x1eb8" "0x1d01" "0x6810" "0x0000" "0x6780")
+# GPU_VRAM=("134217728" "67108864" "268435456" "536870912")
+# RANDOM_VENDOR=${GPU_VENDOR[$RANDOM % ${#GPU_VENDOR[@]}]}
+# RANDOM_DEVICE=${GPU_DEVICE[$RANDOM % ${#GPU_DEVICE[@]}]}
+# RANDOM_VRAM=${GPU_VRAM[$RANDOM % ${#GPU_VRAM[@]}]}
 
-mkdir -p "$(dirname "$VMX_FILE")"
-cat > "$VMX_FILE" <<EOF
-svga.present = "TRUE"
-svga.vramSize = "$RANDOM_VRAM"
-svga.vendorID = "$RANDOM_VENDOR"
-svga.deviceID = "$RANDOM_DEVICE"
-EOF
-echo "[WebGL] GPU ID/VRAM: $RANDOM_VENDOR / $RANDOM_DEVICE / $RANDOM_VRAM"
+# mkdir -p "$(dirname "$VMX_FILE")"
+# cat > "$VMX_FILE" <<EOF
+# svga.present = "TRUE"
+# svga.vramSize = "$RANDOM_VRAM"
+# svga.vendorID = "$RANDOM_VENDOR"
+# svga.deviceID = "$RANDOM_DEVICE"
+# EOF
+# echo "[WebGL] GPU ID/VRAM: $RANDOM_VENDOR / $RANDOM_DEVICE / $RANDOM_VRAM"
 
-# Random Mesa version từ PPA
-sudo add-apt-repository -y ppa:kisak/kisak-mesa
-sudo apt update
-sudo apt install -y mesa-utils mesa-vulkan-drivers
+# # Random Mesa version từ PPA
+# sudo add-apt-repository -y ppa:kisak/kisak-mesa
+# sudo apt update
+# sudo apt install -y mesa-utils mesa-vulkan-drivers
 
-# Xóa thư mục .drirc nếu tồn tại để tạo file mới
-[ -d "$HOME/.drirc" ] && rm -rf "$HOME/.drirc"
+# # Xóa thư mục .drirc nếu tồn tại để tạo file mới
+# [ -d "$HOME/.drirc" ] && rm -rf "$HOME/.drirc"
 
-# Mesa shader precision config (file .drirc)
-cat > "$HOME/.drirc" <<EOF
-<?xml version="1.0"?>
-<!DOCTYPE driinfo SYSTEM "driinfo.dtd">
-<driconf>
- <device>
-  <application name="all">
-    <option name="disable_glsl_line_smooth" value="$(shuf -e true false -n1)"/>
-    <option name="vblank_mode" value="$(shuf -e 0 1 2 -n1)"/>
-    <option name="mesa_glthread" value="$(shuf -e true false -n1)"/>
-  </application>
- </device>
-</driconf>
-EOF
+# # Mesa shader precision config (file .drirc)
+# cat > "$HOME/.drirc" <<EOF
+# <?xml version="1.0"?>
+# <!DOCTYPE driinfo SYSTEM "driinfo.dtd">
+# <driconf>
+#  <device>
+#   <application name="all">
+#     <option name="disable_glsl_line_smooth" value="$(shuf -e true false -n1)"/>
+#     <option name="vblank_mode" value="$(shuf -e 0 1 2 -n1)"/>
+#     <option name="mesa_glthread" value="$(shuf -e true false -n1)"/>
+#   </application>
+#  </device>
+# </driconf>
+# EOF
 
-# Vulkan layer random capability
-mkdir -p ~/.config/vulkan/implicit_layer.d
-cat > ~/.config/vulkan/implicit_layer.d/fp_random.json <<EOF
-{
-    "file_format_version": "1.0.0",
-    "layer": {
-        "name": "FP_RANDOM_LAYER",
-        "type": "INSTANCE",
-        "library_path": "libVkLayer_random.so",
-        "api_version": "1.2.154",
-        "implementation_version": 1,
-        "description": "Random Vulkan Capabilities"
-    }
-}
-EOF
-echo "[WebGL] Mesa + Vulkan config applied."
+# # Vulkan layer random capability
+# mkdir -p ~/.config/vulkan/implicit_layer.d
+# cat > ~/.config/vulkan/implicit_layer.d/fp_random.json <<EOF
+# {
+#     "file_format_version": "1.0.0",
+#     "layer": {
+#         "name": "FP_RANDOM_LAYER",
+#         "type": "INSTANCE",
+#         "library_path": "libVkLayer_random.so",
+#         "api_version": "1.2.154",
+#         "implementation_version": 1,
+#         "description": "Random Vulkan Capabilities"
+#     }
+# }
+# EOF
+# echo "[WebGL] Mesa + Vulkan config applied."
 
 # =============================
 # 2. Canvas – Font, DPI, Fallback
 # =============================
-DPI_SCALE=("1.0" "1.25" "1.5" "1.75" "2.0")
-RANDOM_DPI=${DPI_SCALE[$RANDOM % ${#DPI_SCALE[@]}]}
+
+MIN=1.01
+MAX=1.45
+RANDOM_DPI=$(awk -v min=$MIN -v max=$MAX 'BEGIN{srand(); printf "%.2f", min+rand()*(max-min)}')
+
 gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
 echo "[Canvas] DPI scaling: $RANDOM_DPI"
+
+# DPI_SCALE=("1.0" "1.25" "1.5" "1.75" "2.0")
+# RANDOM_DPI=${DPI_SCALE[$RANDOM % ${#DPI_SCALE[@]}]}
+# gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
+# echo "[Canvas] DPI scaling: $RANDOM_DPI"
 
 FONT_DIR="$HOME/.local/share/fonts"
 mkdir -p "$FONT_DIR"
