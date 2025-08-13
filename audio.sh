@@ -36,6 +36,6 @@ EOF
     echo "[Audio] Driver: $TARGET_AUDIO | DSP: $DSP_PLUGIN | Level: $FILTER_LEVEL"
     echo "[HOÀN TẤT] Tác vụ Audio v1 đã thực hiện xong."
 }
-
+change_audio1()
 # ------------------------------------------------------------------------------
 
