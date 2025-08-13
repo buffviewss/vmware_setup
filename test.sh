@@ -3,14 +3,19 @@ set -euo pipefail
 
 log(){ echo "[Canvas] $*"; }
 
+# --- Không cho chạy bằng root/sudo (để monitors.xml nằm đúng HOME của bạn) ---
+if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+  echo "[Canvas] Đừng chạy script bằng sudo/root. Hãy chạy với user thường."; exit 1
+fi
+
 ########################################
-# 1.1) DPI scaling: mốc phổ biến, map sang Wayland scale tương ứng
-#    - Có thể override bằng: TEXT_SCALE=1.25 ./script.sh
+# 1) DPI scaling: Chọn các mốc tự nhiên, không ưu tiên
+#    - Chọn hoàn toàn ngẫu nhiên từ các mốc DPI phổ biến
 ########################################
 TEXT_SCALE="${TEXT_SCALE:-auto}"
 if [[ "$TEXT_SCALE" == "auto" ]]; then
-  # Ưu tiên các mốc người dùng hay dùng; 1.00/1.25 xuất hiện nhiều hơn
-  SCALES=(1.00 1.00 1.10 1.15 1.20 1.25 1.25 1.33 1.50)
+  # Mốc DPI tự nhiên, có thể tự random từ đây mà không ưu tiên
+  SCALES=(1.0 1.1 1.25 1.33 1.5 1.75 2.0)
   RANDOM_DPI="${SCALES[$RANDOM % ${#SCALES[@]}]}"
 else
   RANDOM_DPI="$TEXT_SCALE"
@@ -30,7 +35,7 @@ WAYLAND_SCALE=$(awk -v v="$RANDOM_DPI" 'BEGIN{
 log "Wayland scale (for monitors.xml): $WAYLAND_SCALE"
 
 ########################################
-# 1.2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
+# 2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
 #    - KHÔNG xóa font mặc định; tắt cài bằng INSTALL_FONTS=0
 ########################################
 INSTALL_FONTS="${INSTALL_FONTS:-1}"
@@ -128,7 +133,7 @@ fi
 log "fonts.conf đã cập nhật (tự nhiên hơn), cache font đã refresh."
 
 ########################################
-# 1.3) Wayland-only: random resolution theo danh sách (VMware/Virtual-1 OK)
+# 3) Wayland-only: random/forced resolution (VMware/Virtual-1 OK)
 #    - Áp dụng thật qua monitors.xml
 #    - Lấy đúng refresh rate bằng modetest
 ########################################
@@ -140,7 +145,7 @@ fi
 # Danh sách như ảnh Settings ▸ Displays
 RES_CHOICES=("1920x1200" "1920x1080" "1918x928" "1856x1392" "1792x1344" "1680x1050" "1600x1200" "1600x900" "1440x900" "1400x1050" "1366x768")
 
-# 1.4) Xác định connector đang connected (VD: card0-Virtual-1)
+# Lấy connector đang connected (VD: /sys/class/drm/card0-Virtual-1)
 DRM_CONNECTED=$(for s in /sys/class/drm/*/status; do
   [[ -f "$s" ]] || continue
   [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs -I{} basename {}
@@ -158,9 +163,11 @@ if [[ ! -f "$MODES_FILE" ]]; then
   exit 0
 fi
 
-# 1.5) Lọc các mode thật sự hỗ trợ
+# Modes vật lý có thật (WIDTHxHEIGHT)
 mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
+log "Modes vật lý: ${REAL_MODES[*]}"
 
+# Giao giữa RES_CHOICES và REAL_MODES
 CANDIDATES=()
 for r in "${RES_CHOICES[@]}"; do
   if printf "%s\n" "${REAL_MODES[@]}" | grep -qx -- "$r"; then
@@ -169,14 +176,24 @@ for r in "${RES_CHOICES[@]}"; do
 done
 
 if ((${#CANDIDATES[@]}==0)); then
-  log "Không có độ phân giải nào trong danh sách trùng với mode thật của $CONNECTOR."
+  log "Không có độ phân giải nào trong danh sách trùng với mode thật của $CONNECTOR. Giữ nguyên."
   exit 0
 fi
 
-# 1.6) Chọn 1 mode hợp lệ + tìm refresh rate khớp bằng modetest
-PICK="${CANDIDATES[$RANDOM % ${#CANDIDATES[@]}]}"
+# Ưu tiên FORCE_RES nếu hợp lệ; nếu không thì random
+if [[ -n "${FORCE_RES:-}" ]] && printf "%s\n" "${CANDIDATES[@]}" | grep -qx -- "$FORCE_RES"; then
+  PICK="$FORCE_RES"
+else
+  PICK="${CANDIDATES[$RANDOM % ${#CANDIDATES[@]}]}"
+fi
 WIDTH="${PICK%x*}"
 HEIGHT="${PICK#*x}"
+
+# Nếu chỉ có 1 mode vật lý và TEXT_SCALE=auto → tự set scale 1.25 cho "thấy khác"
+if [[ ${#REAL_MODES[@]} -eq 1 && "$TEXT_SCALE" == "auto" ]]; then
+  WAYLAND_SCALE="1.25"
+  log "Chỉ có 1 mode vật lý → tự đặt scale = 1.25 để trải nghiệm tự nhiên hơn."
+fi
 
 # Đảm bảo modetest có sẵn
 if ! command -v modetest >/dev/null 2>&1; then
@@ -196,11 +213,9 @@ RATE="$(modetest -c 2>/dev/null \
     ')"
 [[ -z "$RATE" ]] && RATE="60.00"
 
-log "Connector: $CONNECTOR"
-log "Modes thật: ${REAL_MODES[*]}"
-log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}"
+log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}, connector=${CONNECTOR}"
 
-# 1.7) Ghi monitors.xml với scale khớp DPI (WAYLAND_SCALE)
+# Ghi monitors.xml với scale khớp DPI
 MON_DIR="$HOME/.config"
 MON_FILE="$MON_DIR/monitors.xml"
 mkdir -p "$MON_DIR"
