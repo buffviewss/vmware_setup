@@ -233,3 +233,5 @@ EOF
 log "Đã ghi $MON_FILE — Wayland sẽ nạp khi đăng nhập mới."
 log "→ Chạy: gnome-session-quit --logout --no-prompt"
 
+
+
