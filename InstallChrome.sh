@@ -83,15 +83,15 @@ if [[ $BTYPE == "chrome" ]]; then
     echo "🚫 Tắt update nội bộ Chrome..."
     sudo rm -rf /opt/google/chrome/cron/
     sudo mkdir -p /etc/opt/chrome/policies/managed
-   # cat <<EOF > /tmp/disable_update.json
-# {
-#   "AutoUpdateCheckPeriodMinutes": 0,
-#   "DisableAutoUpdateChecksCheckbox": true,
-#   "MetricsReportingEnabled": false
-# }
-# EOF
-#     sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
-#     sudo chmod -R 000 /opt/google/chrome/cron || true
+   cat <<EOF > /tmp/disable_update.json
+{
+  "AutoUpdateCheckPeriodMinutes": 0,
+  "DisableAutoUpdateChecksCheckbox": true,
+  "MetricsReportingEnabled": false
+}
+EOF
+    sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
+    sudo chmod -R 000 /opt/google/chrome/cron || true
 
 elif [[ $BTYPE == "firefox" ]]; then
     echo "🚀 Đang cài Firefox..."
