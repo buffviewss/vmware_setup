@@ -22,7 +22,6 @@ log "Text scaling factor: $RANDOM_DPI"
 
 # Map DPI → Wayland UI scale gần nhất (1, 1.25, 1.5, 1.75, 2.0)
 WAYLAND_SCALE=$(awk -v v="$RANDOM_DPI" 'BEGIN{
-  # các mốc scale hợp lệ/ổn định trong GNOME
   a[1]=1.00; a[2]=1.25; a[3]=1.50; a[4]=1.75; a[5]=2.00;
   best=a[1]; d=(v-a[1]); if(d<0)d=-d;
   for(i=2;i<=5;i++){ dd=(v-a[i]); if(dd<0)dd=-dd; if(dd<d){d=dd; best=a[i]} }
@@ -55,7 +54,7 @@ safe_install_fonts() {
 }
 safe_install_fonts
 
-# Chọn 1 sans-serif đang có thật để ưu tiên
+# Chọn 1 sans-serif đang có thật để ưu tiên (giống người dùng chỉnh)
 PREF_SANS_CANDIDATES=("Ubuntu" "Noto Sans" "DejaVu Sans" "Liberation Sans" "Cantarell" "Roboto")
 if ! command -v fc-list >/dev/null 2>&1; then
   sudo apt-get install -y fontconfig >/dev/null 2>&1 || true
@@ -129,20 +128,22 @@ fi
 log "fonts.conf đã cập nhật (tự nhiên hơn), cache font đã refresh."
 
 ########################################
-# 3) Wayland-only: random resolution theo danh sách (áp dụng thật qua monitors.xml)
+# 3) Wayland-only: random resolution theo danh sách (VMware/Virtual-1 OK)
+#    - Áp dụng thật qua monitors.xml
+#    - Lấy đúng refresh rate bằng modetest
 ########################################
 if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]]; then
-  log "Không phải Wayland → bỏ qua đổi resolution (Wayland-only theo yêu cầu)."
+  log "Không phải Wayland → bỏ qua đổi resolution."
   exit 0
 fi
 
-# Danh sách giống ảnh Settings ▸ Displays
+# Danh sách như ảnh Settings ▸ Displays
 RES_CHOICES=("1920x1200" "1920x1080" "1918x928" "1856x1392" "1792x1344" "1680x1050" "1600x1200" "1600x900" "1440x900" "1400x1050" "1366x768")
 
-# Lấy connector đang kết nối từ sysfs (máy thật)
+# 1) Xác định connector đang connected (VD: card0-Virtual-1)
 DRM_CONNECTED=$(for s in /sys/class/drm/*/status; do
   [[ -f "$s" ]] || continue
-  [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs basename
+  [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs -I{} basename {}
 done | head -n1)
 
 if [[ -z "${DRM_CONNECTED:-}" ]]; then
@@ -150,13 +151,14 @@ if [[ -z "${DRM_CONNECTED:-}" ]]; then
   exit 0
 fi
 
-CONNECTOR="${DRM_CONNECTED#card*-}"
+CONNECTOR="${DRM_CONNECTED#card*-}"     # -> Virtual-1 / eDP-1 / HDMI-A-1 ...
 MODES_FILE="/sys/class/drm/${DRM_CONNECTED}/modes"
 if [[ ! -f "$MODES_FILE" ]]; then
   log "Không thấy $MODES_FILE để kiểm tra mode khả dụng."
   exit 0
 fi
 
+# 2) Lọc các mode thật sự hỗ trợ
 mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
 
 CANDIDATES=()
@@ -167,19 +169,38 @@ for r in "${RES_CHOICES[@]}"; do
 done
 
 if ((${#CANDIDATES[@]}==0)); then
-  log "Không có độ phân giải nào trong danh sách trùng với mode thật của $CONNECTOR. Giữ nguyên."
+  log "Không có độ phân giải nào trong danh sách trùng với mode thật của $CONNECTOR."
   exit 0
 fi
 
+# 3) Chọn 1 mode hợp lệ + tìm refresh rate khớp bằng modetest
 PICK="${CANDIDATES[$RANDOM % ${#CANDIDATES[@]}]}"
 WIDTH="${PICK%x*}"
 HEIGHT="${PICK#*x}"
-RATE="60.00"  # GNOME sẽ chọn tần số gần nhất nếu khác
+
+# Đảm bảo modetest có sẵn
+if ! command -v modetest >/dev/null 2>&1; then
+  sudo apt-get update -y || true
+  sudo apt-get install -y libdrm-tests || true
+fi
+
+# Lấy đúng refresh cho WIDTHxHEIGHT trên CONNECTOR (ví dụ 60.00 / 59.94 …)
+RATE="$(modetest -c 2>/dev/null \
+  | awk -v c="$CONNECTOR" -v w="$WIDTH" -v h="$HEIGHT" '
+      $0 ~ "^Connector .*\\(" c "\\):" {in=1; next}
+      in && /^Connector / {in=0}
+      in && $1 ~ /^[0-9]+x[0-9]+$/ {
+        split($1,xy,"x");
+        if (xy[1]==w && xy[2]==h) { print $2; exit }
+      }
+    ')"
+[[ -z "$RATE" ]] && RATE="60.00"
 
 log "Connector: $CONNECTOR"
 log "Modes thật: ${REAL_MODES[*]}"
-log "Chọn và ghi monitors.xml → ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}"
+log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}"
 
+# 4) Ghi monitors.xml với scale khớp DPI (WAYLAND_SCALE)
 MON_DIR="$HOME/.config"
 MON_FILE="$MON_DIR/monitors.xml"
 mkdir -p "$MON_DIR"
@@ -209,5 +230,5 @@ cat > "$MON_FILE" <<EOF
 </monitors>
 EOF
 
-log "Đã ghi $MON_FILE (Wayland đọc khi đăng nhập)."
-log "→ Đăng xuất/đăng nhập để áp dụng độ phân giải & scale mới."
+log "Đã ghi $MON_FILE — Wayland sẽ nạp khi đăng nhập mới."
+log "→ Chạy: gnome-session-quit --logout --no-prompt"
