@@ -1,237 +1,235 @@
+cat > randomize-audio-persona.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-log(){ echo "[Canvas] $*"; }
+# randomize-audio-persona.sh
+# Ubuntu 24.04 (Wayland) — VMware guest
+# Each run picks a *realistic* audio configuration (persona): sample-rate, buffer quantum,
+# and human-looking device nick/description, writes PipeWire/WirePlumber overrides,
+# restarts services, and prints a summary. Includes revert & deterministic seed.
+#
+# Usage:
+#   sudo ./randomize-audio-persona.sh              # random persona
+#   sudo ./randomize-audio-persona.sh --seed 123   # deterministic run
+#   sudo ./randomize-audio-persona.sh --revert     # remove overrides
+#   ./randomize-audio-persona.sh --vmx-suggestion  # print VMware .vmx options
+#
+# Notes:
+# - This does NOT change VMware's audio model from the guest; it sets a realistic audio
+#   environment inside Ubuntu so browsers compute a different WebAudio fingerprint.
+# - Keep using your preferred sink; you can change default with `wpctl set-default` later.
 
-########################################
-# 1.1) DPI scaling: mốc phổ biến, map sang Wayland scale tương ứng
-#    - Có thể override bằng: TEXT_SCALE=1.25 ./script.sh
-########################################
-TEXT_SCALE="${TEXT_SCALE:-auto}"
-if [[ "$TEXT_SCALE" == "auto" ]]; then
-  # Ưu tiên các mốc người dùng hay dùng; 1.00/1.25 xuất hiện nhiều hơn
-  SCALES=(1.00 1.00 1.10 1.15 1.20 1.25 1.25 1.33 1.50)
-  RANDOM_DPI="${SCALES[$RANDOM % ${#SCALES[@]}]}"
-else
-  RANDOM_DPI="$TEXT_SCALE"
-fi
+PIPEWIRE_DIR="/etc/pipewire/pipewire.conf.d"
+PIPEWIRE_FILE="${PIPEWIRE_DIR}/99-sample-rate.conf"
+WP_DIR="/etc/wireplumber/main.lua.d"
+WP_FILE="${WP_DIR}/51-alsa-rename.lua"
 
-# Áp dụng text scale cho GNOME
-gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
-log "Text scaling factor: $RANDOM_DPI"
+SEED=""
 
-# Map DPI → Wayland UI scale gần nhất (1, 1.25, 1.5, 1.75, 2.0)
-WAYLAND_SCALE=$(awk -v v="$RANDOM_DPI" 'BEGIN{
-  a[1]=1.00; a[2]=1.25; a[3]=1.50; a[4]=1.75; a[5]=2.00;
-  best=a[1]; d=(v-a[1]); if(d<0)d=-d;
-  for(i=2;i<=5;i++){ dd=(v-a[i]); if(dd<0)dd=-dd; if(dd<d){d=dd; best=a[i]} }
-  printf "%.2f", best;
-}')
-log "Wayland scale (for monitors.xml): $WAYLAND_SCALE"
+info() { echo -e "[+] $*"; }
+warn() { echo -e "[!] $*" >&2; }
+die()  { echo -e "[x] $*" >&2; exit 1; }
 
-########################################
-# 1.2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
-#    - KHÔNG xóa font mặc định; tắt cài bằng INSTALL_FONTS=0
-########################################
-INSTALL_FONTS="${INSTALL_FONTS:-1}"
-
-safe_install_fonts() {
-  if [[ "$INSTALL_FONTS" = "1" ]]; then
-    sudo apt-get update -y || true
-    sudo apt-get install -y \
-      fontconfig \
-      fonts-ubuntu fonts-dejavu-core fonts-dejavu-extra \
-      fonts-liberation2 fonts-liberation \
-      fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-color-emoji \
-      fonts-cantarell fonts-freefont-ttf \
-      fonts-hack-ttf fonts-firacode \
-      fonts-roboto \
-      >/dev/null 2>&1 || true
-    log "Đã cài thêm bộ font phổ biến (không xóa gì)."
-  else
-    log "Bỏ qua bước cài thêm font (INSTALL_FONTS=0)."
+need_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    echo "This command needs root. Re-run with: sudo $0 $*" >&2
+    exit 1
   fi
 }
-safe_install_fonts
 
-# Chọn 1 sans-serif đang có thật để ưu tiên (giống người dùng chỉnh)
-PREF_SANS_CANDIDATES=("Ubuntu" "Noto Sans" "DejaVu Sans" "Liberation Sans" "Cantarell" "Roboto")
-if ! command -v fc-list >/dev/null 2>&1; then
-  sudo apt-get install -y fontconfig >/dev/null 2>&1 || true
-fi
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --revert) DO_REVERT="true"; shift;;
+      --seed) SEED="$2"; shift 2;;
+      --vmx-suggestion) DO_VMX_SUGGESTION="true"; shift;;
+      -h|--help)
+        cat <<'HLP'
+Usage: sudo ./randomize-audio-persona.sh [--seed N] [--revert] [--vmx-suggestion]
 
-PREF_HEAD="Ubuntu"
-if command -v fc-list >/dev/null 2>&1; then
-  INSTALLED_SANS=()
-  for f in "${PREF_SANS_CANDIDATES[@]}"; do
-    if fc-list | grep -qi -- "$f"; then
-      INSTALLED_SANS+=("$f")
-    fi
+Options:
+  --seed N            Use a deterministic seed (same persona for same N)
+  --revert            Remove overrides and restart services
+  --vmx-suggestion    Show VMware .vmx options to change audio model (host-side)
+  -h, --help          Show help
+HLP
+        exit 0
+        ;;
+      *)
+        die "Unknown option: $1 (see --help)"
+        ;;
+    esac
   done
-  if ((${#INSTALLED_SANS[@]})); then
-    PREF_HEAD=${INSTALLED_SANS[$RANDOM % ${#INSTALLED_SANS[@]}]}
+}
+
+# Deterministic RNG based on $SEED or /dev/urandom fallback.
+rand() {
+  if [[ -n "${SEED}" ]]; then
+    local -i x=$SEED
+    x=$((x ^ (x << 13) & 0xFFFFFFFF))
+    x=$((x ^ (x >> 17)))
+    x=$((x ^ (x << 5) & 0xFFFFFFFF))
+    SEED=$x
+    echo $((x & 0x7FFFFFFF))
+  else
+    od -An -N4 -tu4 < /dev/urandom | tr -d ' '
   fi
-fi
-log "Ưu tiên sans-serif: $PREF_HEAD"
+}
 
-mkdir -p ~/.config/fontconfig
-cat > ~/.config/fontconfig/fonts.conf <<EOF
-<?xml version='1.0'?>
-<!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
-<fontconfig>
-  <!-- Không ép toàn hệ thống; chỉ ưu tiên để trông tự nhiên -->
-  <alias>
-    <family>sans-serif</family>
-    <prefer>
-      <family>${PREF_HEAD}</family>
-      <family>Ubuntu</family>
-      <family>Noto Sans</family>
-      <family>DejaVu Sans</family>
-      <family>Liberation Sans</family>
-      <family>Cantarell</family>
-      <family>Roboto</family>
-      <family>Noto Color Emoji</family>
-    </prefer>
-  </alias>
+pick() { # pick one item from args
+  local n=$#
+  local r=$(($(rand) % n + 1))
+  eval "echo \${$r}"
+}
 
-  <alias>
-    <family>serif</family>
-    <prefer>
-      <family>Noto Serif</family>
-      <family>DejaVu Serif</family>
-      <family>Liberation Serif</family>
-    </prefer>
-  </alias>
+ensure_packages() {
+  info "Ensuring PipeWire/WirePlumber & ALSA tools are installed..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y --no-install-recommends \
+    pipewire pipewire-audio pipewire-pulse wireplumber libspa-0.2-modules alsa-utils
+}
 
-  <alias>
-    <family>monospace</family>
-    <prefer>
-      <family>Ubuntu Mono</family>
-      <family>DejaVu Sans Mono</family>
-      <family>Liberation Mono</family>
-      <family>Fira Code</family>
-    </prefer>
-  </alias>
+write_pipewire_conf() {
+  local RATE="$1"
+  local ALLOWED="$2"
+  local QUANTUM="$3"
+  local MINQ="$4"
+  local MAXQ="$5"
+  mkdir -p "${PIPEWIRE_DIR}"
+  cat > "${PIPEWIRE_FILE}" <<EOF2
+# Generated by randomize-audio-persona.sh
+context.properties = {
+  default.clock.rate          = ${RATE}
+  default.clock.allowed-rates = [ ${ALLOWED} ]
+  default.clock.quantum       = ${QUANTUM}
+  default.clock.min-quantum   = ${MINQ}
+  default.clock.max-quantum   = ${MAXQ}
+}
+EOF2
+}
 
-  <alias>
-    <family>emoji</family>
-    <prefer>
-      <family>Noto Color Emoji</family>
-    </prefer>
-  </alias>
-</fontconfig>
-EOF
+write_wireplumber_rule() {
+  local NICK="$1"
+  local DESC="$2"
+  mkdir -p "${WP_DIR}"
+  cat > "${WP_FILE}" <<EOF3
+-- Generated by randomize-audio-persona.sh
+-- Rename ALSA devices to a plausible real model (affects UI / getUserMedia labels)
+rule = {
+  matches = { { { "device.api", "equals", "alsa" } } },
+  apply_properties = {
+    ["device.nick"] = "${NICK}",
+    ["device.description"] = "${DESC}"
+  }
+}
+alsa_monitor.rules = alsa_monitor.rules or {}
+table.insert(alsa_monitor.rules, rule)
+EOF3
+}
 
-if command -v fc-cache >/dev/null 2>&1; then
-  fc-cache -f >/dev/null 2>&1 || true
-fi
-log "fonts.conf đã cập nhật (tự nhiên hơn), cache font đã refresh."
+restart_user_services() {
+  info "Restarting PipeWire & WirePlumber user services..."
+  loginctl enable-linger "$SUDO_USER" >/dev/null 2>&1 || true
+  sudo -u "$SUDO_USER" systemctl --user daemon-reload || true
+  sudo -u "$SUDO_USER" systemctl --user restart pipewire pipewire-pulse wireplumber || true
+}
 
-########################################
-# 1.3) Wayland-only: random resolution theo danh sách (VMware/Virtual-1 OK)
-#    - Áp dụng thật qua monitors.xml
-#    - Lấy đúng refresh rate bằng modetest
-########################################
-if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]]; then
-  log "Không phải Wayland → bỏ qua đổi resolution."
-  exit 0
-fi
+revert_all() {
+  info "Reverting overrides..."
+  rm -f "${PIPEWIRE_FILE}" "${WP_FILE}"
+  restart_user_services
+  info "Done. System back to defaults."
+}
 
-# Danh sách như ảnh Settings ▸ Displays
-RES_CHOICES=("1920x1200" "1920x1080" "1918x928" "1856x1392" "1792x1344" "1680x1050" "1600x1200" "1600x900" "1440x900" "1400x1050" "1366x768")
+print_summary() {
+  echo "-------------------------------------------------------------"
+  echo " Randomized audio persona applied"
+  echo "-------------------------------------------------------------"
+  echo " Persona:        $1"
+  echo " Sample-rate:    $2"
+  echo " Allowed rates:  $3"
+  echo " Quantum:        $4 (min $5 / max $6)"
+  echo " Nick:           $7"
+  echo " Description:    $8"
+  echo "-------------------------------------------------------------"
+  echo "Tip: open your browser and test Audio fingerprint again."
+  echo "    - To list sinks/sources: wpctl status | sed -n '/Audio/,/Video/p'"
+  echo "    - To set default sink:   wpctl set-default <ID-or-Name>"
+  echo "    - Revert:                sudo $0 --revert"
+}
 
-# 1.4) Xác định connector đang connected (VD: card0-Virtual-1)
-DRM_CONNECTED=$(for s in /sys/class/drm/*/status; do
-  [[ -f "$s" ]] || continue
-  [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs -I{} basename {}
-done | head -n1)
+print_vmx_suggestion() {
+  cat <<'EOF4'
+---- VMware .vmx audio options (edit on HOST, VM OFF) ----
+sound.present = "TRUE"
+sound.autodetect = "TRUE"
+sound.virtualDev = "hdaudio"   # Intel HD Audio (modern, natural on Linux)
+# sound.virtualDev = "es1371"  # Ensoniq AudioPCI (older, very different pipeline)
+# sound.virtualDev = "sb16"    # Sound Blaster 16 (legacy, not recommended)
+# Optional: passthrough a real USB audio device
+# usb.autoConnect.device0 = "vid:0d8c pid:013c"  # C-Media example
+EOF4
+}
 
-if [[ -z "${DRM_CONNECTED:-}" ]]; then
-  log "Không phát hiện connector đang kết nối trong /sys/class/drm."
-  exit 0
-fi
+main() {
+  DO_REVERT="false"
+  DO_VMX_SUGGESTION="false"
+  parse_args "$@"
 
-CONNECTOR="${DRM_CONNECTED#card*-}"     # -> Virtual-1 / eDP-1 / HDMI-A-1 ...
-MODES_FILE="/sys/class/drm/${DRM_CONNECTED}/modes"
-if [[ ! -f "$MODES_FILE" ]]; then
-  log "Không thấy $MODES_FILE để kiểm tra mode khả dụng."
-  exit 0
-fi
-
-# 1.5) Lọc các mode thật sự hỗ trợ
-mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
-
-CANDIDATES=()
-for r in "${RES_CHOICES[@]}"; do
-  if printf "%s\n" "${REAL_MODES[@]}" | grep -qx -- "$r"; then
-    CANDIDATES+=("$r")
+  if [[ "${DO_VMX_SUGGESTION}" == "true" ]]; then
+    print_vmx_suggestion
+    exit 0
   fi
-done
 
-if ((${#CANDIDATES[@]}==0)); then
-  log "Không có độ phân giải nào trong danh sách trùng với mode thật của $CONNECTOR."
-  exit 0
-fi
+  if [[ "${DO_REVERT}" == "true" ]]; then
+    need_root
+    revert_all
+    exit 0
+  fi
 
-# 1.6) Chọn 1 mode hợp lệ + tìm refresh rate khớp bằng modetest
-PICK="${CANDIDATES[$RANDOM % ${#CANDIDATES[@]}]}"
-WIDTH="${PICK%x*}"
-HEIGHT="${PICK#*x}"
+  need_root
+  ensure_packages
 
-# Đảm bảo modetest có sẵn
-if ! command -v modetest >/dev/null 2>&1; then
-  sudo apt-get update -y || true
-  sudo apt-get install -y libdrm-tests || true
-fi
+  # === Persona pools (realistic names & params) ===
+  RATES=("48000" "44100")
+  ALLOWED_OPTS=("48000 44100" "44100 48000")
+  QUANTA=("512" "1024" "2048")
 
-# Lấy đúng refresh cho WIDTHxHEIGHT trên CONNECTOR (ví dụ 60.00 / 59.94 …)
-RATE="$(modetest -c 2>/dev/null \
-  | awk -v c="$CONNECTOR" -v w="$WIDTH" -v h="$HEIGHT" '
-      $0 ~ "^Connector .*\\(" c "\\):" {in=1; next}
-      in && /^Connector / {in=0}
-      in && $1 ~ /^[0-9]+x[0-9]+$/ {
-        split($1,xy,"x");
-        if (xy[1]==w && xy[2]==h) { print $2; exit }
-      }
-    ')"
-[[ -z "$RATE" ]] && RATE="60.00"
+  # Plausible device labels (nick|desc)
+  PERSONA_LABELS=(
+    "Realtek ALC887|Realtek ALC887 HD Audio"
+    "Realtek ALC892|Realtek ALC892 HD Audio"
+    "Realtek ALC897|Realtek ALC897 HD Audio"
+    "HDA Intel PCH|Built-in Audio HD (PCH)"
+    "AMD Family 17h HD Audio|AMD High Definition Audio Controller"
+    "USB Audio|C-Media USB Headset"
+    "Plantronics Blackwire 3220|Plantronics Blackwire 3220 Headset"
+    "Jabra Evolve 20|Jabra Evolve 20 USB"
+  )
 
-log "Connector: $CONNECTOR"
-log "Modes thật: ${REAL_MODES[*]}"
-log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}"
+  # === Random picks ===
+  RATE="$(pick "${RATES[@]}")"
+  ALLOWED="$(pick "${ALLOWED_OPTS[@]}")"
+  QUANTUM="$(pick "${QUANTA[@]}")"
 
-# 1.7) Ghi monitors.xml với scale khớp DPI (WAYLAND_SCALE)
-MON_DIR="$HOME/.config"
-MON_FILE="$MON_DIR/monitors.xml"
-mkdir -p "$MON_DIR"
-[[ -f "$MON_FILE" ]] && cp -f "$MON_FILE" "$MON_FILE.bak" && log "Đã sao lưu: $MON_FILE.bak"
+  case "${QUANTUM}" in
+    512)  MINQ=256; MAXQ=1024;;
+    1024) MINQ=512; MAXQ=2048;;
+    2048) MINQ=512; MAXQ=4096;;
+    *)    MINQ=512; MAXQ=2048;;
+  esac
 
-cat > "$MON_FILE" <<EOF
-<monitors version="2">
-  <configuration>
-    <logicalmonitor>
-      <x>0</x>
-      <y>0</y>
-      <scale>${WAYLAND_SCALE}</scale>
-      <transform>normal</transform>
-      <monitor>
-        <monitorspec>
-          <connector>${CONNECTOR}</connector>
-        </monitorspec>
-        <mode>
-          <width>${WIDTH}</width>
-          <height>${HEIGHT}</height>
-          <rate>${RATE}</rate>
-        </mode>
-      </monitor>
-      <primary>yes</primary>
-    </logicalmonitor>
-  </configuration>
-</monitors>
+  label="$(pick "${PERSONA_LABELS[@]}")"
+  NICK="${label%%|*}"
+  DESC="${label#*|}"
+
+  write_pipewire_conf "${RATE}" "${ALLOWED}" "${QUANTUM}" "${MINQ}" "${MAXQ}"
+  write_wireplumber_rule "${NICK}" "${DESC}"
+  restart_user_services
+  print_summary "auto" "${RATE}" "${ALLOWED}" "${QUANTUM}" "${MINQ}" "${MAXQ}" "${NICK}" "${DESC}"
+}
+
+main "$@"
 EOF
-
-log "Đã ghi $MON_FILE — Wayland sẽ nạp khi đăng nhập mới."
-log "→ Chạy: gnome-session-quit --logout --no-prompt"
-
-
-
+chmod +x randomize-audio-persona.sh
