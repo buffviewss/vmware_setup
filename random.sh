@@ -75,10 +75,6 @@ RANDOM_DPI=$(awk -v min=$MIN -v max=$MAX 'BEGIN{srand(); printf "%.2f", min+rand
 gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
 echo "[Canvas] DPI scaling: $RANDOM_DPI"
 
-# DPI_SCALE=("1.0" "1.25" "1.5" "1.75" "2.0")
-# RANDOM_DPI=${DPI_SCALE[$RANDOM % ${#DPI_SCALE[@]}]}
-# gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
-# echo "[Canvas] DPI scaling: $RANDOM_DPI"
 
 FONT_DIR="$HOME/.local/share/fonts"
 mkdir -p "$FONT_DIR"
@@ -185,7 +181,7 @@ echo "[ClientRects] hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpix
 # =============================
 echo "-----------------------------------"
 echo "TÓM TẮT:"
-echo "WebGL: Vendor=$RANDOM_VENDOR, Device=$RANDOM_DEVICE, VRAM=$RANDOM_VRAM"
+# echo "WebGL: Vendor=$RANDOM_VENDOR, Device=$RANDOM_DEVICE, VRAM=$RANDOM_VRAM"
 echo "Canvas: DPI=$RANDOM_DPI, Font=$RANDOM_FONT"
 echo "Audio: Driver=$TARGET_AUDIO, DSP=$DSP_PLUGIN, Level=$FILTER_LEVEL"
 echo "ClientRects: hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
