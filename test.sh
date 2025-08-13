@@ -9,30 +9,61 @@ if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
 fi
 
 ########################################
-# 1) DPI scaling: Chọn các mốc tự nhiên, không ưu tiên
-#    - Chọn hoàn toàn ngẫu nhiên từ các mốc DPI phổ biến
+# 1) DPI scaling (chữ): mốc phổ biến, random tự nhiên (không ưu tiên)
+#    - Override: TEXT_SCALE=1.25 ./script.sh
 ########################################
 TEXT_SCALE="${TEXT_SCALE:-auto}"
 if [[ "$TEXT_SCALE" == "auto" ]]; then
-  # Mốc DPI tự nhiên, có thể tự random từ đây mà không ưu tiên
   SCALES=(1.0 1.1 1.25 1.33 1.5 1.75 2.0)
   RANDOM_DPI="${SCALES[$RANDOM % ${#SCALES[@]}]}"
 else
   RANDOM_DPI="$TEXT_SCALE"
 fi
-
-# Áp dụng text scale cho GNOME
 gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
 log "Text scaling factor: $RANDOM_DPI"
 
-# Map DPI → Wayland UI scale gần nhất (1, 1.25, 1.5, 1.75, 2.0)
-WAYLAND_SCALE=$(awk -v v="$RANDOM_DPI" 'BEGIN{
-  a[1]=1.00; a[2]=1.25; a[3]=1.50; a[4]=1.75; a[5]=2.00;
-  best=a[1]; d=(v-a[1]); if(d<0)d=-d;
-  for(i=2;i<=5;i++){ dd=(v-a[i]); if(dd<0)dd=-dd; if(dd<d){d=dd; best=a[i]} }
-  printf "%.2f", best;
-}')
-log "Wayland scale (for monitors.xml): $WAYLAND_SCALE"
+########################################
+# 1.1) UI scale Wayland: random tự nhiên (không ưu tiên mốc nào)
+#      - Override: FORCE_WAYLAND_SCALE=1.25
+#      - Hoặc: WAYLAND_SCALE_MODE=near (chọn lân cận DPI chữ theo tỉ lệ 0.6/0.2/0.2)
+########################################
+UI_SCALES=(1.00 1.25 1.50 1.75 2.00)
+WAYLAND_SCALE_MODE="${WAYLAND_SCALE_MODE:-uniform}"
+
+pick_uniform_scale() {
+  echo "${UI_SCALES[$RANDOM % ${#UI_SCALES[@]}]}"
+}
+
+pick_near_scale() {
+  # Chọn mốc gần nhất với RANDOM_DPI nhưng có “nhiễu” người dùng: 60% gần nhất, 20% mỗi lân cận
+  # Tìm index gần nhất
+  nearest=0; bestdiff=9e9
+  for i in "${!UI_SCALES[@]}"; do
+    diff=$(awk -v a="${UI_SCALES[$i]}" -v b="$RANDOM_DPI" 'BEGIN{d=a-b; if(d<0)d=-d; print d}')
+    awk -v d="$diff" -v bd="$bestdiff" 'BEGIN{exit !(d<bd)}' && { nearest="$i"; bestdiff="$diff"; }
+  done
+  # Lấy 3 ứng viên: nearest, neighbor-
+  cands=("$nearest")
+  (( nearest>0 )) && cands+=($((nearest-1)))
+  (( nearest<${#UI_SCALES[@]}-1 )) && cands+=($((nearest+1)))
+
+  # Trọng số 60/20/20 theo thứ tự cands
+  r=$((RANDOM % 10))
+  if (( r < 6 )); then idx="${cands[0]}"
+  elif (( r < 8 )); then idx="${cands[1]:-${cands[0]}}"
+  else idx="${cands[2]:-${cands[0]}}"
+  fi
+  echo "${UI_SCALES[$idx]}"
+}
+
+if [[ -n "${FORCE_WAYLAND_SCALE:-}" ]]; then
+  WAYLAND_SCALE=$(printf "%.2f" "$FORCE_WAYLAND_SCALE")
+elif [[ "$WAYLAND_SCALE_MODE" == "near" ]]; then
+  WAYLAND_SCALE=$(pick_near_scale)
+else
+  WAYLAND_SCALE=$(pick_uniform_scale)
+fi
+log "Wayland UI scale: $WAYLAND_SCALE (mode=${WAYLAND_SCALE_MODE})"
 
 ########################################
 # 2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
@@ -59,7 +90,6 @@ safe_install_fonts() {
 }
 safe_install_fonts
 
-# Chọn 1 sans-serif đang có thật để ưu tiên (giống người dùng chỉnh)
 PREF_SANS_CANDIDATES=("Ubuntu" "Noto Sans" "DejaVu Sans" "Liberation Sans" "Cantarell" "Roboto")
 if ! command -v fc-list >/dev/null 2>&1; then
   sudo apt-get install -y fontconfig >/dev/null 2>&1 || true
@@ -69,9 +99,7 @@ PREF_HEAD="Ubuntu"
 if command -v fc-list >/dev/null 2>&1; then
   INSTALLED_SANS=()
   for f in "${PREF_SANS_CANDIDATES[@]}"; do
-    if fc-list | grep -qi -- "$f"; then
-      INSTALLED_SANS+=("$f")
-    fi
+    if fc-list | grep -qi -- "$f"; then INSTALLED_SANS+=("$f"); fi
   done
   if ((${#INSTALLED_SANS[@]})); then
     PREF_HEAD=${INSTALLED_SANS[$RANDOM % ${#INSTALLED_SANS[@]}]}
@@ -142,10 +170,8 @@ if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]]; then
   exit 0
 fi
 
-# Danh sách như ảnh Settings ▸ Displays
 RES_CHOICES=("1920x1200" "1920x1080" "1918x928" "1856x1392" "1792x1344" "1680x1050" "1600x1200" "1600x900" "1440x900" "1400x1050" "1366x768")
 
-# Lấy connector đang connected (VD: /sys/class/drm/card0-Virtual-1)
 DRM_CONNECTED=$(for s in /sys/class/drm/*/status; do
   [[ -f "$s" ]] || continue
   [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs -I{} basename {}
@@ -156,23 +182,19 @@ if [[ -z "${DRM_CONNECTED:-}" ]]; then
   exit 0
 fi
 
-CONNECTOR="${DRM_CONNECTED#card*-}"     # -> Virtual-1 / eDP-1 / HDMI-A-1 ...
+CONNECTOR="${DRM_CONNECTED#card*-}"
 MODES_FILE="/sys/class/drm/${DRM_CONNECTED}/modes"
 if [[ ! -f "$MODES_FILE" ]]; then
   log "Không thấy $MODES_FILE để kiểm tra mode khả dụng."
   exit 0
 fi
 
-# Modes vật lý có thật (WIDTHxHEIGHT)
 mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
 log "Modes vật lý: ${REAL_MODES[*]}"
 
-# Giao giữa RES_CHOICES và REAL_MODES
 CANDIDATES=()
 for r in "${RES_CHOICES[@]}"; do
-  if printf "%s\n" "${REAL_MODES[@]}" | grep -qx -- "$r"; then
-    CANDIDATES+=("$r")
-  fi
+  if printf "%s\n" "${REAL_MODES[@]}" | grep -qx -- "$r"; then CANDIDATES+=("$r"); fi
 done
 
 if ((${#CANDIDATES[@]}==0)); then
@@ -180,7 +202,6 @@ if ((${#CANDIDATES[@]}==0)); then
   exit 0
 fi
 
-# Ưu tiên FORCE_RES nếu hợp lệ; nếu không thì random
 if [[ -n "${FORCE_RES:-}" ]] && printf "%s\n" "${CANDIDATES[@]}" | grep -qx -- "$FORCE_RES"; then
   PICK="$FORCE_RES"
 else
@@ -189,19 +210,11 @@ fi
 WIDTH="${PICK%x*}"
 HEIGHT="${PICK#*x}"
 
-# Nếu chỉ có 1 mode vật lý và TEXT_SCALE=auto → tự set scale 1.25 cho "thấy khác"
-if [[ ${#REAL_MODES[@]} -eq 1 && "$TEXT_SCALE" == "auto" ]]; then
-  WAYLAND_SCALE="1.25"
-  log "Chỉ có 1 mode vật lý → tự đặt scale = 1.25 để trải nghiệm tự nhiên hơn."
-fi
-
-# Đảm bảo modetest có sẵn
 if ! command -v modetest >/dev/null 2>&1; then
   sudo apt-get update -y || true
   sudo apt-get install -y libdrm-tests || true
 fi
 
-# Lấy đúng refresh cho WIDTHxHEIGHT trên CONNECTOR (ví dụ 60.00 / 59.94 …)
 RATE="$(modetest -c 2>/dev/null \
   | awk -v c="$CONNECTOR" -v w="$WIDTH" -v h="$HEIGHT" '
       $0 ~ "^Connector .*\\(" c "\\):" {in=1; next}
@@ -215,7 +228,6 @@ RATE="$(modetest -c 2>/dev/null \
 
 log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}, connector=${CONNECTOR}"
 
-# Ghi monitors.xml với scale khớp DPI
 MON_DIR="$HOME/.config"
 MON_FILE="$MON_DIR/monitors.xml"
 mkdir -p "$MON_DIR"
