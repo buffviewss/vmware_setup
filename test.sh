@@ -4,7 +4,7 @@ set -euo pipefail
 log(){ echo "[Canvas] $*"; }
 
 ########################################
-# 1) DPI scaling: mốc phổ biến, map sang Wayland scale tương ứng
+# 1.1) DPI scaling: mốc phổ biến, map sang Wayland scale tương ứng
 #    - Có thể override bằng: TEXT_SCALE=1.25 ./script.sh
 ########################################
 TEXT_SCALE="${TEXT_SCALE:-auto}"
@@ -30,7 +30,7 @@ WAYLAND_SCALE=$(awk -v v="$RANDOM_DPI" 'BEGIN{
 log "Wayland scale (for monitors.xml): $WAYLAND_SCALE"
 
 ########################################
-# 2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
+# 1.2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
 #    - KHÔNG xóa font mặc định; tắt cài bằng INSTALL_FONTS=0
 ########################################
 INSTALL_FONTS="${INSTALL_FONTS:-1}"
@@ -128,7 +128,7 @@ fi
 log "fonts.conf đã cập nhật (tự nhiên hơn), cache font đã refresh."
 
 ########################################
-# 3) Wayland-only: random resolution theo danh sách (VMware/Virtual-1 OK)
+# 1.3) Wayland-only: random resolution theo danh sách (VMware/Virtual-1 OK)
 #    - Áp dụng thật qua monitors.xml
 #    - Lấy đúng refresh rate bằng modetest
 ########################################
@@ -140,7 +140,7 @@ fi
 # Danh sách như ảnh Settings ▸ Displays
 RES_CHOICES=("1920x1200" "1920x1080" "1918x928" "1856x1392" "1792x1344" "1680x1050" "1600x1200" "1600x900" "1440x900" "1400x1050" "1366x768")
 
-# 1) Xác định connector đang connected (VD: card0-Virtual-1)
+# 1.4) Xác định connector đang connected (VD: card0-Virtual-1)
 DRM_CONNECTED=$(for s in /sys/class/drm/*/status; do
   [[ -f "$s" ]] || continue
   [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs -I{} basename {}
@@ -158,7 +158,7 @@ if [[ ! -f "$MODES_FILE" ]]; then
   exit 0
 fi
 
-# 2) Lọc các mode thật sự hỗ trợ
+# 1.5) Lọc các mode thật sự hỗ trợ
 mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
 
 CANDIDATES=()
@@ -173,7 +173,7 @@ if ((${#CANDIDATES[@]}==0)); then
   exit 0
 fi
 
-# 3) Chọn 1 mode hợp lệ + tìm refresh rate khớp bằng modetest
+# 1.6) Chọn 1 mode hợp lệ + tìm refresh rate khớp bằng modetest
 PICK="${CANDIDATES[$RANDOM % ${#CANDIDATES[@]}]}"
 WIDTH="${PICK%x*}"
 HEIGHT="${PICK#*x}"
@@ -200,7 +200,7 @@ log "Connector: $CONNECTOR"
 log "Modes thật: ${REAL_MODES[*]}"
 log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}"
 
-# 4) Ghi monitors.xml với scale khớp DPI (WAYLAND_SCALE)
+# 1.7) Ghi monitors.xml với scale khớp DPI (WAYLAND_SCALE)
 MON_DIR="$HOME/.config"
 MON_FILE="$MON_DIR/monitors.xml"
 mkdir -p "$MON_DIR"
