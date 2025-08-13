@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 log(){ echo "[Canvas] $*"; }
 
-# --- Không cho chạy bằng root/sudo (để monitors.xml nằm đúng HOME của bạn) ---
+# Không chạy bằng root
 if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-  echo "[Canvas] Đừng chạy script bằng sudo/root. Hãy chạy với user thường."; exit 1
+  echo "[Canvas] Đừng chạy bằng sudo/root. Hãy chạy với user thường."; exit 1
+fi
+
+# 0) đảm bảo thư viện D-Bus cho Python
+if ! python3 -c 'import gi' 2>/dev/null; then
+  sudo apt-get update -y || true
+  sudo apt-get install -y python3-gi gir1.2-glib-2.0 >/dev/null 2>&1 || true
 fi
 
 ########################################
-# 1) DPI scaling (chữ): mốc phổ biến, random tự nhiên (không ưu tiên)
-#    - Override: TEXT_SCALE=1.25 ./script.sh
+# 1) DPI (text) & UI scale
 ########################################
 TEXT_SCALE="${TEXT_SCALE:-auto}"
 if [[ "$TEXT_SCALE" == "auto" ]]; then
@@ -22,240 +26,140 @@ fi
 gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
 log "Text scaling factor: $RANDOM_DPI"
 
-########################################
-# 1.1) UI scale Wayland: random tự nhiên (không ưu tiên mốc nào)
-#      - Override: FORCE_WAYLAND_SCALE=1.25
-#      - Hoặc: WAYLAND_SCALE_MODE=near (chọn lân cận DPI chữ theo tỉ lệ 0.6/0.2/0.2)
-########################################
 UI_SCALES=(1.00 1.25 1.50 1.75 2.00)
 WAYLAND_SCALE_MODE="${WAYLAND_SCALE_MODE:-uniform}"
-
-pick_uniform_scale() {
-  echo "${UI_SCALES[$RANDOM % ${#UI_SCALES[@]}]}"
-}
-
-pick_near_scale() {
-  # Chọn mốc gần nhất với RANDOM_DPI nhưng có “nhiễu” người dùng: 60% gần nhất, 20% mỗi lân cận
-  # Tìm index gần nhất
-  nearest=0; bestdiff=9e9
-  for i in "${!UI_SCALES[@]}"; do
-    diff=$(awk -v a="${UI_SCALES[$i]}" -v b="$RANDOM_DPI" 'BEGIN{d=a-b; if(d<0)d=-d; print d}')
-    awk -v d="$diff" -v bd="$bestdiff" 'BEGIN{exit !(d<bd)}' && { nearest="$i"; bestdiff="$diff"; }
-  done
-  # Lấy 3 ứng viên: nearest, neighbor-
-  cands=("$nearest")
-  (( nearest>0 )) && cands+=($((nearest-1)))
-  (( nearest<${#UI_SCALES[@]}-1 )) && cands+=($((nearest+1)))
-
-  # Trọng số 60/20/20 theo thứ tự cands
-  r=$((RANDOM % 10))
-  if (( r < 6 )); then idx="${cands[0]}"
-  elif (( r < 8 )); then idx="${cands[1]:-${cands[0]}}"
-  else idx="${cands[2]:-${cands[0]}}"
-  fi
-  echo "${UI_SCALES[$idx]}"
-}
-
 if [[ -n "${FORCE_WAYLAND_SCALE:-}" ]]; then
   WAYLAND_SCALE=$(printf "%.2f" "$FORCE_WAYLAND_SCALE")
-elif [[ "$WAYLAND_SCALE_MODE" == "near" ]]; then
-  WAYLAND_SCALE=$(pick_near_scale)
 else
-  WAYLAND_SCALE=$(pick_uniform_scale)
-fi
-log "Wayland UI scale: $WAYLAND_SCALE (mode=${WAYLAND_SCALE_MODE})"
-
-########################################
-# 2) Font: cài thêm gói có thật + fonts.conf “tự nhiên”
-#    - KHÔNG xóa font mặc định; tắt cài bằng INSTALL_FONTS=0
-########################################
-INSTALL_FONTS="${INSTALL_FONTS:-1}"
-
-safe_install_fonts() {
-  if [[ "$INSTALL_FONTS" = "1" ]]; then
-    sudo apt-get update -y || true
-    sudo apt-get install -y \
-      fontconfig \
-      fonts-ubuntu fonts-dejavu-core fonts-dejavu-extra \
-      fonts-liberation2 fonts-liberation \
-      fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-color-emoji \
-      fonts-cantarell fonts-freefont-ttf \
-      fonts-hack-ttf fonts-firacode \
-      fonts-roboto \
-      >/dev/null 2>&1 || true
-    log "Đã cài thêm bộ font phổ biến (không xóa gì)."
+  if [[ "$WAYLAND_SCALE_MODE" == "near" ]]; then
+    nearest=0; best=9e9
+    for i in "${!UI_SCALES[@]}"; do
+      d=$(awk -v a="${UI_SCALES[$i]}" -v b="$RANDOM_DPI" 'BEGIN{d=a-b; if(d<0)d=-d; print d}')
+      awk -v d="$d" -v b="$best" 'BEGIN{exit !(d<b)}' && { nearest=$i; best=$d; }
+    done
+    cands=($nearest); ((nearest>0)) && cands+=($((nearest-1))); ((nearest<${#UI_SCALES[@]}-1)) && cands+=($((nearest+1)))
+    r=$((RANDOM%10)); if ((r<6)); then pick="${cands[0]}"; elif ((r<8)); then pick="${cands[1]:-${cands[0]}}"; else pick="${cands[2]:-${cands[0]}}"; fi
+    WAYLAND_SCALE=$(printf "%.2f" "${UI_SCALES[$pick]}")
   else
-    log "Bỏ qua bước cài thêm font (INSTALL_FONTS=0)."
-  fi
-}
-safe_install_fonts
-
-PREF_SANS_CANDIDATES=("Ubuntu" "Noto Sans" "DejaVu Sans" "Liberation Sans" "Cantarell" "Roboto")
-if ! command -v fc-list >/dev/null 2>&1; then
-  sudo apt-get install -y fontconfig >/dev/null 2>&1 || true
-fi
-
-PREF_HEAD="Ubuntu"
-if command -v fc-list >/dev/null 2>&1; then
-  INSTALLED_SANS=()
-  for f in "${PREF_SANS_CANDIDATES[@]}"; do
-    if fc-list | grep -qi -- "$f"; then INSTALLED_SANS+=("$f"); fi
-  done
-  if ((${#INSTALLED_SANS[@]})); then
-    PREF_HEAD=${INSTALLED_SANS[$RANDOM % ${#INSTALLED_SANS[@]}]}
+    WAYLAND_SCALE=$(printf "%.2f" "${UI_SCALES[$RANDOM % ${#UI_SCALES[@]}]}")
   fi
 fi
-log "Ưu tiên sans-serif: $PREF_HEAD"
+log "Wayland UI scale (immediate): $WAYLAND_SCALE"
 
-mkdir -p ~/.config/fontconfig
-cat > ~/.config/fontconfig/fonts.conf <<EOF
-<?xml version='1.0'?>
-<!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
-<fontconfig>
-  <!-- Không ép toàn hệ thống; chỉ ưu tiên để trông tự nhiên -->
-  <alias>
-    <family>sans-serif</family>
-    <prefer>
-      <family>${PREF_HEAD}</family>
-      <family>Ubuntu</family>
-      <family>Noto Sans</family>
-      <family>DejaVu Sans</family>
-      <family>Liberation Sans</family>
-      <family>Cantarell</family>
-      <family>Roboto</family>
-      <family>Noto Color Emoji</family>
-    </prefer>
-  </alias>
-
-  <alias>
-    <family>serif</family>
-    <prefer>
-      <family>Noto Serif</family>
-      <family>DejaVu Serif</family>
-      <family>Liberation Serif</family>
-    </prefer>
-  </alias>
-
-  <alias>
-    <family>monospace</family>
-    <prefer>
-      <family>Ubuntu Mono</family>
-      <family>DejaVu Sans Mono</family>
-      <family>Liberation Mono</family>
-      <family>Fira Code</family>
-    </prefer>
-  </alias>
-
-  <alias>
-    <family>emoji</family>
-    <prefer>
-      <family>Noto Color Emoji</family>
-    </prefer>
-  </alias>
-</fontconfig>
-EOF
-
-if command -v fc-cache >/dev/null 2>&1; then
-  fc-cache -f >/dev/null 2>&1 || true
-fi
-log "fonts.conf đã cập nhật (tự nhiên hơn), cache font đã refresh."
-
-########################################
-# 3) Wayland-only: random/forced resolution (VMware/Virtual-1 OK)
-#    - Áp dụng thật qua monitors.xml
-#    - Lấy đúng refresh rate bằng modetest
-########################################
-if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]]; then
-  log "Không phải Wayland → bỏ qua đổi resolution."
-  exit 0
+# Bật fractional scaling nếu cần
+if [[ "$WAYLAND_SCALE" != "1.00" && "$WAYLAND_SCALE" != "2.00" ]]; then
+  gsettings set org.gnome.mutter experimental-features "['scale-monitor-framebuffer']" || true
+  log "Enabled GNOME fractional scaling feature."
 fi
 
-RES_CHOICES=("1920x1200" "1920x1080" "1918x928" "1856x1392" "1792x1344" "1680x1050" "1600x1200" "1600x900" "1440x900" "1400x1050" "1366x768")
-
+########################################
+# 2) Chọn Resolution từ modes thật (hoặc FORCE_RES=WxH)
+########################################
+# Tìm connector đang connected
 DRM_CONNECTED=$(for s in /sys/class/drm/*/status; do
   [[ -f "$s" ]] || continue
   [[ "$(cat "$s")" == "connected" ]] && dirname "$s" | xargs -I{} basename {}
 done | head -n1)
+[[ -z "${DRM_CONNECTED:-}" ]] && { log "Không thấy connector connected"; exit 0; }
 
-if [[ -z "${DRM_CONNECTED:-}" ]]; then
-  log "Không phát hiện connector đang kết nối trong /sys/class/drm."
-  exit 0
-fi
-
-CONNECTOR="${DRM_CONNECTED#card*-}"
+CONNECTOR="${DRM_CONNECTED#card*-}"      # ví dụ Virtual-1
 MODES_FILE="/sys/class/drm/${DRM_CONNECTED}/modes"
-if [[ ! -f "$MODES_FILE" ]]; then
-  log "Không thấy $MODES_FILE để kiểm tra mode khả dụng."
-  exit 0
-fi
+[[ ! -f "$MODES_FILE" ]] && { log "Không có $MODES_FILE"; exit 0; }
 
-mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
-log "Modes vật lý: ${REAL_MODES[*]}"
+mapfile -t REAL_MODES < <(awk -Fx '{ if ($1>=800 && $2>=600) print $0 }' "$MODES_FILE" | awk '!seen[$0]++')
+log "Modes thật: ${REAL_MODES[*]}"
 
-CANDIDATES=()
-for r in "${RES_CHOICES[@]}"; do
-  if printf "%s\n" "${REAL_MODES[@]}" | grep -qx -- "$r"; then CANDIDATES+=("$r"); fi
-done
-
-if ((${#CANDIDATES[@]}==0)); then
-  log "Không có độ phân giải nào trong danh sách trùng với mode thật của $CONNECTOR. Giữ nguyên."
-  exit 0
-fi
-
-if [[ -n "${FORCE_RES:-}" ]] && printf "%s\n" "${CANDIDATES[@]}" | grep -qx -- "$FORCE_RES"; then
+if [[ -n "${FORCE_RES:-}" ]] && printf "%s\n" "${REAL_MODES[@]}" | grep -qx -- "$FORCE_RES"; then
   PICK="$FORCE_RES"
 else
-  PICK="${CANDIDATES[$RANDOM % ${#CANDIDATES[@]}]}"
+  PICK="${REAL_MODES[$RANDOM % ${#REAL_MODES[@]}]}"
 fi
-WIDTH="${PICK%x*}"
-HEIGHT="${PICK#*x}"
+TARGET_W="${PICK%x*}"
+TARGET_H="${PICK#*x}"
+log "Target resolution: ${TARGET_W}x${TARGET_H} (connector=$CONNECTOR)"
 
-if ! command -v modetest >/dev/null 2>&1; then
-  sudo apt-get update -y || true
-  sudo apt-get install -y libdrm-tests || true
-fi
+########################################
+# 3) ÁP DỤNG NGAY bằng D-Bus (org.gnome.Mutter.DisplayConfig)
+########################################
+APPLY_METHOD="${APPLY_METHOD:-2}"  # 1=temporary, 2=persistent
+python3 - <<'PY' || { echo "[Canvas] D-Bus apply failed"; exit 1; }
+from gi.repository import Gio, GLib
+import os, sys
 
-RATE="$(modetest -c 2>/dev/null \
-  | awk -v c="$CONNECTOR" -v w="$WIDTH" -v h="$HEIGHT" '
-      $0 ~ "^Connector .*\\(" c "\\):" {in=1; next}
-      in && /^Connector / {in=0}
-      in && $1 ~ /^[0-9]+x[0-9]+$/ {
-        split($1,xy,"x");
-        if (xy[1]==w && xy[2]==h) { print $2; exit }
-      }
-    ')"
-[[ -z "$RATE" ]] && RATE="60.00"
+t_w = int(os.environ['TARGET_W'])
+t_h = int(os.environ['TARGET_H'])
+scale = float(os.environ['WAYLAND_SCALE'])
+conn_name = os.environ.get('CONNECTOR','')
+method = int(os.environ.get('APPLY_METHOD','2'))
 
-log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, scale=${WAYLAND_SCALE}, connector=${CONNECTOR}"
+bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+proxy = Gio.DBusProxy.new_sync(
+    bus, 0, None,
+    'org.gnome.Mutter.DisplayConfig',
+    '/org/gnome/Mutter/DisplayConfig',
+    'org.gnome.Mutter.DisplayConfig', None
+)
 
-MON_DIR="$HOME/.config"
-MON_FILE="$MON_DIR/monitors.xml"
-mkdir -p "$MON_DIR"
-[[ -f "$MON_FILE" ]] && cp -f "$MON_FILE" "$MON_FILE.bak" && log "Đã sao lưu: $MON_FILE.bak"
+serial, monitors, logical_monitors, props = proxy.call_sync('GetCurrentState', None, 0, -1, None).unpack()
 
-cat > "$MON_FILE" <<EOF
-<monitors version="2">
-  <configuration>
-    <logicalmonitor>
-      <x>0</x>
-      <y>0</y>
-      <scale>${WAYLAND_SCALE}</scale>
-      <transform>normal</transform>
-      <monitor>
-        <monitorspec>
-          <connector>${CONNECTOR}</connector>
-        </monitorspec>
-        <mode>
-          <width>${WIDTH}</width>
-          <height>${HEIGHT}</height>
-          <rate>${RATE}</rate>
-        </mode>
-      </monitor>
-      <primary>yes</primary>
-    </logicalmonitor>
-  </configuration>
-</monitors>
-EOF
+# Chọn monitor theo connector (nếu trùng), nếu không lấy cái đầu tiên
+mon_id = None
+modes_map = {}
+for mid, md in monitors:
+    if mon_id is None:
+        mon_id = mid
+        modes_map = { m_id: m_attr for (m_id, m_attr) in md.get('modes', []) }
+    if md.get('connector') == conn_name:
+        mon_id = mid
+        modes_map = { m_id: m_attr for (m_id, m_attr) in md.get('modes', []) }
+        break
 
-log "Đã ghi $MON_FILE — Wayland sẽ nạp khi đăng nhập mới."
-log "→ Chạy: gnome-session-quit --logout --no-prompt"
+# Tìm mode id theo WIDTHxHEIGHT
+mode_id = None
+for mid, m in modes_map.items():
+    if int(m.get('width',-1)) == t_w and int(m.get('height',-1)) == t_h:
+        mode_id = mid
+        break
+if mode_id is None:
+    # fallback: lấy mode đầu tiên
+    for mid, m in modes_map.items():
+        mode_id = mid; t_w=int(m.get('width',t_w)); t_h=int(m.get('height',t_h)); break
+
+# Xây logical_monitors mới (giữ layout, chỉ đổi 'mode' và 'scale')
+lm_out = []
+for lmid, lmd in logical_monitors:
+    new_dict = {}
+
+    # copy các khóa hay gặp
+    if 'x' in lmd: new_dict['x'] = GLib.Variant('i', int(lmd['x']))
+    if 'y' in lmd: new_dict['y'] = GLib.Variant('i', int(lmd['y']))
+    if 'transform' in lmd: new_dict['transform'] = GLib.Variant('i', int(lmd['transform']))
+    if 'primary' in lmd: new_dict['primary'] = GLib.Variant('b', bool(lmd['primary']))
+
+    new_dict['scale'] = GLib.Variant('d', scale)
+
+    # monitors: [(u, a{sv})]
+    new_mon_list = []
+    for pmid, pmd in lmd.get('monitors', []):
+        mdict = {}
+        if pmid == mon_id:
+            mdict['mode'] = GLib.Variant('u', int(mode_id))
+        elif 'mode' in pmd:
+            mdict['mode'] = GLib.Variant('u', int(pmd['mode']))
+        new_mon_list.append((GLib.Variant('u', int(pmid)), GLib.Variant('a{sv}', mdict)))
+
+    new_lm = (GLib.Variant('u', int(lmid)),
+              GLib.Variant('a{sv}', {**new_dict, 'monitors': GLib.Variant('a(ua{sv})', new_mon_list)}))
+    lm_out.append(new_lm)
+
+lm_array = GLib.Variant('a(ua{sv})', lm_out)
+props_v = GLib.Variant('a{sv}', {})
+
+proxy.call_sync('ApplyMonitorsConfig',
+                GLib.Variant('(uu@a(ua{sv})@a{sv})', (int(serial), method, lm_array, props_v)),
+                0, -1, None)
+
+print(f"[Canvas] D-Bus applied: {t_w}x{t_h} scale={scale} monitor_id={mon_id}")
+PY
+
+log "DONE — Resolution/Scale đã đổi NGAY trong phiên."
