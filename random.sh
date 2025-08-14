@@ -4,6 +4,22 @@ set -e
 
 echo "[FP-MAX] Fingerprint Randomizer 10/10 – Ubuntu/Lubuntu 24.04"
 
+# ==== Dispatcher: chọn ngẫu nhiên 1 trong 2 block (canvas|audio) ====
+# Có thể ép chọn bằng biến môi trường: FP_PICK=canvas|audio|random (mặc định: random)
+FP_PICK="${FP_PICK:-random}"
+_CHOICES=(canvas audio)
+
+if [[ "$FP_PICK" == "random" ]]; then
+  PICK="${_CHOICES[$((RANDOM % ${#_CHOICES[@]}))]}"
+else
+  case "$FP_PICK" in
+    canvas|audio) PICK="$FP_PICK" ;;
+    *) echo "FP_PICK không hợp lệ: $FP_PICK (chỉ canvas|audio|random)"; exit 1 ;;
+  esac
+fi
+echo "[Dispatcher] Sẽ chạy block: $PICK"
+
+
 # =============================
 # # I. WebGL – GPU + Mesa + Vulkan
 # # =============================
@@ -11,6 +27,12 @@ echo "[FP-MAX] Fingerprint Randomizer 10/10 – Ubuntu/Lubuntu 24.04"
 # =============================
 # II. Canvas – Font, DPI, Fallback
 # =============================
+
+
+
+# ===== BLOCK 2: Canvas =====
+if [[ "$PICK" == "canvas" ]]; then
+(
 
 #!/usr/bin/env bash
 # Ubuntu 24.04 + Wayland — Random fingerprint MỖI LẦN CHẠY (100% dựa trên phần cứng)
@@ -311,10 +333,22 @@ fi
 
 log "DONE."
 
+)  # kết thúc subshell cho block Canvas
+
+
+
 
 # =============================
 # III. Audio – Driver & DSP plugin
 # =============================
+
+
+
+else  # nếu không phải canvas thì là audio
+(
+  # Đặt lại tham số dòng lệnh để block Audio hiểu là "không tham số" -> auto-apply
+  set --
+
 #!/usr/bin/env bash
 # audiofp-persist.sh (v3.2)
 # Ubuntu 24.04 + Wayland + PipeWire/WirePlumber
@@ -741,6 +775,11 @@ case "${cmd:-}" in
   "")            echo "No arguments supplied => auto-apply random model"; apply_profile "" "" "" ;;
   *)             usage; exit 1 ;;
 esac
+
+)  # kết thúc subshell cho block Audio
+fi
+exit 0
+
 # =============================
 # IV. ClientRects – Metrics change
 # =============================
