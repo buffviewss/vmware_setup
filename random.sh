@@ -7,62 +7,6 @@ echo "[FP-MAX] Fingerprint Randomizer 10/10 – Ubuntu/Lubuntu 24.04"
 # =============================
 # # 1. WebGL – GPU + Mesa + Vulkan
 # # =============================
-# VMX_FILE="$HOME/.vmware/your_vm.vmx"
-# GPU_VENDOR=("0x10de" "0x8086" "0x1002" "0x1414" "0x1043")
-# GPU_DEVICE=("0x1eb8" "0x1d01" "0x6810" "0x0000" "0x6780")
-# GPU_VRAM=("134217728" "67108864" "268435456" "536870912")
-# RANDOM_VENDOR=${GPU_VENDOR[$RANDOM % ${#GPU_VENDOR[@]}]}
-# RANDOM_DEVICE=${GPU_DEVICE[$RANDOM % ${#GPU_DEVICE[@]}]}
-# RANDOM_VRAM=${GPU_VRAM[$RANDOM % ${#GPU_VRAM[@]}]}
-
-# mkdir -p "$(dirname "$VMX_FILE")"
-# cat > "$VMX_FILE" <<EOF
-# svga.present = "TRUE"
-# svga.vramSize = "$RANDOM_VRAM"
-# svga.vendorID = "$RANDOM_VENDOR"
-# svga.deviceID = "$RANDOM_DEVICE"
-# EOF
-# echo "[WebGL] GPU ID/VRAM: $RANDOM_VENDOR / $RANDOM_DEVICE / $RANDOM_VRAM"
-
-# # Random Mesa version từ PPA
-# sudo add-apt-repository -y ppa:kisak/kisak-mesa
-# sudo apt update
-# sudo apt install -y mesa-utils mesa-vulkan-drivers
-
-# # Xóa thư mục .drirc nếu tồn tại để tạo file mới
-# [ -d "$HOME/.drirc" ] && rm -rf "$HOME/.drirc"
-
-# # Mesa shader precision config (file .drirc)
-# cat > "$HOME/.drirc" <<EOF
-# <?xml version="1.0"?>
-# <!DOCTYPE driinfo SYSTEM "driinfo.dtd">
-# <driconf>
-#  <device>
-#   <application name="all">
-#     <option name="disable_glsl_line_smooth" value="$(shuf -e true false -n1)"/>
-#     <option name="vblank_mode" value="$(shuf -e 0 1 2 -n1)"/>
-#     <option name="mesa_glthread" value="$(shuf -e true false -n1)"/>
-#   </application>
-#  </device>
-# </driconf>
-# EOF
-
-# # Vulkan layer random capability
-# mkdir -p ~/.config/vulkan/implicit_layer.d
-# cat > ~/.config/vulkan/implicit_layer.d/fp_random.json <<EOF
-# {
-#     "file_format_version": "1.0.0",
-#     "layer": {
-#         "name": "FP_RANDOM_LAYER",
-#         "type": "INSTANCE",
-#         "library_path": "libVkLayer_random.so",
-#         "api_version": "1.2.154",
-#         "implementation_version": 1,
-#         "description": "Random Vulkan Capabilities"
-#     }
-# }
-# EOF
-# echo "[WebGL] Mesa + Vulkan config applied."
 
 # =============================
 # 2. Canvas – Font, DPI, Fallback
@@ -800,37 +744,4 @@ esac
 # =============================
 # 4. ClientRects – Metrics change
 # =============================
-# HINTING_OPTIONS=("true" "false")
-# ANTIALIAS_OPTIONS=("true" "false")
-# SUBPIXEL_OPTIONS=("rgb" "bgr" "vrgb" "vbgr" "none")
-# RANDOM_HINTING=${HINTING_OPTIONS[$RANDOM % ${#HINTING_OPTIONS[@]}]}
-# RANDOM_ANTIALIAS=${ANTIALIAS_OPTIONS[$RANDOM % ${#ANTIALIAS_OPTIONS[@]}]}
-# RANDOM_SUBPIXEL=${SUBPIXEL_OPTIONS[$RANDOM % ${#SUBPIXEL_OPTIONS[@]}]}
 
-# cat > ~/.config/fontconfig/render.conf <<EOF
-# <?xml version='1.0'?>
-# <!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
-# <fontconfig>
-#   <match target="font">
-#     <edit name="hinting" mode="assign"><bool>$RANDOM_HINTING</bool></edit>
-#     <edit name="antialias" mode="assign"><bool>$RANDOM_ANTIALIAS</bool></edit>
-#     <edit name="rgba" mode="assign"><const>$RANDOM_SUBPIXEL</const></edit>
-#     <edit name="ascent" mode="assign"><double>$(shuf -i 750-850 -n1)</double></edit>
-#     <edit name="descent" mode="assign"><double>$(shuf -i 150-250 -n1)</double></edit>
-#     <edit name="leading" mode="assign"><double>$(shuf -i 50-120 -n1)</double></edit>
-#   </match>
-# </fontconfig>
-# EOF
-# fc-cache -fv >/dev/null
-# echo "[ClientRects] hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
-
-# # =============================
-# # Summary
-# # =============================
-# echo "-----------------------------------"
-# echo "TÓM TẮT:"
-# # echo "WebGL: Vendor=$RANDOM_VENDOR, Device=$RANDOM_DEVICE, VRAM=$RANDOM_VRAM"
-# echo "Canvas: DPI=$RANDOM_DPI, Font=$RANDOM_FONT"
-# echo "Audio: Driver=$TARGET_AUDIO, DSP=$DSP_PLUGIN, Level=$FILTER_LEVEL"
-# echo "ClientRects: hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
-# echo "Hãy reboot VM để các thay đổi áp dụng hoàn toàn."
