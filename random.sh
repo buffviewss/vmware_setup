@@ -350,12 +350,13 @@ else  # nếu không phải canvas thì là audio
   set --
 
 #!/usr/bin/env bash
-# audiofp-persist.sh (v3.2)
+# audiofp-persist.sh (v3.2-no-revert)
 # Ubuntu 24.04 + Wayland + PipeWire/WirePlumber
 # - KHÔNG tham số => auto-apply random model
-# - --force-channels <1|2|6|8>  (ép số kênh)
-# - --latency-class <low|mid|high>  (ép quantum: 128/256/(512|1024))
+# - --force-channels <1|2|6|8>
+# - --latency-class <low|mid|high>  (low=128, mid=256, high=512|1024)
 # - Tự cài deps nếu thiếu (sudo apt update && sudo apt install -y pipewire-bin wireplumber pulseaudio-utils)
+# - ĐÃ LOẠI BỎ HOÀN TOÀN "revert"
 
 set -euo pipefail
 
@@ -553,7 +554,6 @@ get_params_from_model() {
   echo "$model|$rate|$quantum|$desc|$ch"
 }
 
-# Map kênh -> channel_map
 channel_map_for() {
   case "$1" in
     1) echo "mono" ;;
@@ -564,13 +564,11 @@ channel_map_for() {
   esac
 }
 
-# Map latency-class -> quantum
 quantum_from_latency_class() {
   case "$1" in
     low)  echo "128" ;;
     mid)  echo "256" ;;
-    high) # cho tự nhiên: 512 hoặc 1024
-      if ((RANDOM % 2)); then echo "512"; else echo "1024"; fi ;;
+    high) if ((RANDOM % 2)); then echo "512"; else echo "1024"; fi ;;
     *)    echo "" ;;
   esac
 }
@@ -632,7 +630,6 @@ pactl set-default-sink "$VSINK" || true
 # Yêu cầu WirePlumber lưu default targets
 wpctl settings --save node.restore-default-targets true >/dev/null 2>&1 || true
 EOSH
-  # thay placeholder
   sed -i "s|{{VSINK}}|$vsink_name|g; s|{{DESC}}|$desc|g; s|{{CH}}|$ch|g; s|{{CHMAP}}|$chmap|g" "$HELPER"
   chmod +x "$HELPER"
 }
@@ -704,19 +701,6 @@ apply_profile() {
 
 rotate_profile() { apply_profile "$1" "$2" "$3"; }
 
-revert_all() {
-  echo ">> Reverting AudioFP to defaults…"
-  systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
-  systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
-  rm -f "$SYSD_USER_DIR/$SERVICE_NAME" "$HELPER"
-  rm -f "$PW_DROPIN_FILE" "$WP_DROPIN_FILE"
-  pactl list short modules | awk '/audiofp_vsink|module-virtual-sink/ {print $1}' | xargs -r -n1 pactl unload-module || true
-  pw-metadata -n settings 0 clock.force-rate 0  >/dev/null 2>&1 || true
-  pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1 || true
-  systemctl --user restart pipewire pipewire-pulse wireplumber || true
-  echo ">> DONE."
-}
-
 status() {
   echo "=== PipeWire clock (pw-metadata) ==="
   pw-metadata -n settings 0 | sed 's/^/  /' || true
@@ -735,18 +719,16 @@ usage() {
   cat <<EOF
 Usage:
   $0 models
-  $0 apply [--model <name>] [--force-channels <1|2|6|8>] [--latency-class <low|mid|high>]
+  $0 apply  [--model <name>] [--force-channels <1|2|6|8>] [--latency-class <low|mid|high>]
   $0 rotate [--model <name>] [--force-channels <1|2|6|8>] [--latency-class <low|mid|high>]
   $0 status
-  $0 revert
   $0 install-deps
 
-Mặc định (không tham số): auto-apply random model.
+Mặc định (không có tham số): auto-apply random model.
 Ví dụ:
-  $0                                  # Auto apply (random)
+  $0
   $0 apply --model htpc-nvidia-hdmi --force-channels 8 --latency-class low
-  $0 apply --model bluetooth-a2dp --latency-class high
-  $0 rotate --force-channels 6 --latency-class mid
+  $0 rotate --model bluetooth-a2dp --latency-class high
 EOF
 }
 
@@ -770,7 +752,6 @@ case "${cmd:-}" in
   apply)         apply_profile "$model" "$force_channels" "$latency_class" ;;
   rotate)        rotate_profile "$model" "$force_channels" "$latency_class" ;;
   status)        status ;;
-  revert)        revert_all ;;
   install-deps)  install_deps ;;
   "")            echo "No arguments supplied => auto-apply random model"; apply_profile "" "" "" ;;
   *)             usage; exit 1 ;;
