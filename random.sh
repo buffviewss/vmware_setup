@@ -5,11 +5,11 @@ set -e
 echo "[FP-MAX] Fingerprint Randomizer 10/10 – Ubuntu/Lubuntu 24.04"
 
 # =============================
-# # 1. WebGL – GPU + Mesa + Vulkan
+# # I. WebGL – GPU + Mesa + Vulkan
 # # =============================
 
 # =============================
-# 2. Canvas – Font, DPI, Fallback
+# II. Canvas – Font, DPI, Fallback
 # =============================
 
 #!/usr/bin/env bash
@@ -313,7 +313,7 @@ log "DONE."
 
 
 # =============================
-# 3. Audio – Driver & DSP plugin
+# III. Audio – Driver & DSP plugin
 # =============================
 #!/usr/bin/env bash
 # audiofp-persist.sh (v3.2)
@@ -742,6 +742,6 @@ case "${cmd:-}" in
   *)             usage; exit 1 ;;
 esac
 # =============================
-# 4. ClientRects – Metrics change
+# IV. ClientRects – Metrics change
 # =============================
 
