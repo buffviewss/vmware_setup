@@ -1,298 +1,276 @@
+# 1) Tạo file
+cat > audio-persona-linux.sh <<'EOF'
 #!/usr/bin/env bash
-# Ubuntu 24.04 + Wayland — Random fingerprint MỖI LẦN CHẠY (100% dựa trên phần cứng)
-# Fix: tránh dùng biến 'in' trong awk (mawk coi là keyword) → đổi thành 'inside'
+set -euo pipefail
+# audio-persona-linux.sh — Ubuntu 24.04 (Wayland) ONLY
+# Mục tiêu: fingerprint AudioContext "trông như thật" bằng cách:
+#  - Khóa sample-rate 48 kHz (chuẩn Linux)
+#  - Đặt buffer quantum hợp lý
+#  - Đặt tên thiết bị dựa trên PHẦN CỨNG THẬT (HDA/ES1371 và codec ALC nếu có)
+#  - Không random mỗi lần; mặc định ổn định theo máy
+#
+# Tuỳ chọn:
+#   --rate 48000|44100     (mặc định 48000; khuyên 48000 trên Linux)
+#   --quantum N            (512|1024|2048; mặc định auto=1024)
+#   --no-rename            (không đụng tới nhãn thiết bị)
+#   --rotate-weekly        (thay đổi NHẸ quantum theo tuần; vẫn giữ 48 kHz)
+#   --revert               (gỡ cấu hình)
+#   --vmx-hint             (gợi ý dùng hdaudio trong .vmx — KHÔNG yêu cầu)
+#
+# Ghi chú:
+# - Không cài hay bật JACK realtime.
+# - Chỉ cài các gói PipeWire/WirePlumber/ALSA cần thiết.
 
-set -u -o pipefail
-[[ "${DEBUG:-0}" == "1" ]] && set -x
-shopt -s nullglob
+# ---------- Config paths ----------
+PW_DIR="/etc/pipewire/pipewire.conf.d"
+PW_FILE="$PW_DIR/99-audio-persona-linux.conf"
+WP_DIR="/etc/wireplumber/main.lua.d"
+WP_FILE="$WP_DIR/51-audio-persona-linux.lua"
 
-log() { printf '[%(%F %T)T] %s\n' -1 "$*"; }
+# ---------- Utils ----------
+info(){ echo "[+] $*"; }
+warn(){ echo "[!] $*" >&2; }
+die(){  echo "[x] $*" >&2; exit 1; }
 
-TEXT_SCALE="${TEXT_SCALE:-auto}"
-INSTALL_FONTS="${INSTALL_FONTS:-1}"
-
-POPULAR_SCALES=(1.00 1.00 1.10 1.15 1.20 1.25 1.25 1.33 1.50)
-WAYLAND_STEPS=(1.00 1.25 1.50 1.75 2.00)
-
-float_absdiff() { awk -v x="$1" -v y="$2" 'BEGIN{d=x-y; if(d<0)d=-d; print d}'; }
-float_lt()      { awk -v a="$1" -v b="$2" 'BEGIN{print (a<b)?1:0}'; }
-
-nearest_wayland_scale() {
-  local v="$1" best="${WAYLAND_STEPS[0]}" bestd
-  bestd="$(float_absdiff "$v" "${WAYLAND_STEPS[0]}")"
-  for s in "${WAYLAND_STEPS[@]:1}"; do
-    local d; d="$(float_absdiff "$v" "$s")"
-    if [[ "$(float_lt "$d" "$bestd")" == "1" ]]; then
-      best="$s"; bestd="$d"
-    fi
-  done
-  printf "%.2f" "$best"
+need_root(){
+  if [[ ${EUID:-0} -ne 0 ]]; then
+    die "Cần quyền root. Hãy chạy: sudo $0 $*"
+  fi
 }
 
-# 0) Info
-command -v lsb_release >/dev/null 2>&1 && log "Distro: $(lsb_release -ds)"
-log "Session type: ${XDG_SESSION_TYPE:-unknown}"
-
-# 1) Fonts
-if [[ "$INSTALL_FONTS" == "1" ]]; then
-  sudo apt-get update -y >/dev/null 2>&1 || true
-  sudo apt-get install -y \
-    fontconfig \
-    fonts-ubuntu fonts-cantarell \
-    fonts-dejavu-core fonts-dejavu-extra \
-    fonts-liberation2 \
-    fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-color-emoji \
-    fonts-hack-ttf fonts-firacode \
-    fonts-roboto \
-    >/dev/null 2>&1 || true
-  log "Đã cài thêm bộ font phổ biến (không xóa gì)."
-else
-  log "Bỏ qua cài font (INSTALL_FONTS=0)."
-fi
-
-command -v fc-list >/dev/null 2>&1 || sudo apt-get install -y fontconfig >/dev/null 2>&1 || true
-PREF_SANS_CANDIDATES=("Ubuntu" "Noto Sans" "DejaVu Sans" "Liberation Sans" "Cantarell" "Roboto")
-INSTALLED_SANS=()
-if command -v fc-list >/dev/null 2>&1; then
-  for f in "${PREF_SANS_CANDIDATES[@]}"; do
-    fc-list | grep -qi -- "$f" && INSTALLED_SANS+=("$f")
-  done
-fi
-[[ ${#INSTALLED_SANS[@]} -eq 0 ]] && INSTALLED_SANS=("Ubuntu")
-
-FC_FILE="$HOME/.config/fontconfig/fonts.conf"
-LAST_PREF_HEAD=""
-if [[ -r "$FC_FILE" ]]; then
-  LAST_PREF_HEAD="$(sed -n '/<family>sans-serif<\/family>/,/<\/prefer>/p' "$FC_FILE" \
-    | sed -n 's/ *<family>\(.*\)<\/family>.*/\1/p' | head -n1 || true)"
-fi
-CANDS=("${INSTALLED_SANS[@]}")
-if [[ -n "$LAST_PREF_HEAD" && ${#CANDS[@]} -gt 1 ]]; then
-  tmp=(); for s in "${CANDS[@]}"; do [[ "$s" != "$LAST_PREF_HEAD" ]] && tmp+=("$s"); done; CANDS=("${tmp[@]}")
-fi
-PREF_HEAD="${CANDS[$((RANDOM % ${#CANDS[@]}))]}"
-
-mkdir -p ~/.config/fontconfig
-cat > "$FC_FILE" <<EOF
-<?xml version='1.0'?>
-<!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
-<fontconfig>
-  <alias>
-    <family>sans-serif</family>
-    <prefer>
-      <family>${PREF_HEAD}</family>
-      <family>Ubuntu</family>
-      <family>Noto Sans</family>
-      <family>DejaVu Sans</family>
-      <family>Liberation Sans</family>
-      <family>Cantarell</family>
-      <family>Roboto</family>
-      <family>Noto Color Emoji</family>
-    </prefer>
-  </alias>
-  <alias>
-    <family>serif</family>
-    <prefer>
-      <family>Noto Serif</family>
-      <family>DejaVu Serif</family>
-      <family>Liberation Serif</family>
-    </prefer>
-  </alias>
-  <alias>
-    <family>monospace</family>
-    <prefer>
-      <family>Ubuntu Mono</family>
-      <family>DejaVu Sans Mono</family>
-      <family>Liberation Mono</family>
-      <family>Fira Code</family>
-    </prefer>
-  </alias>
-  <alias>
-    <family>emoji</family>
-    <prefer>
-      <family>Noto Color Emoji</family>
-    </prefer>
-  </alias>
-</fontconfig>
-EOF
-command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
-log "fonts.conf đã cập nhật (tự nhiên hơn)."
-
-# 2) Nếu không Wayland, bỏ qua monitors.xml
-if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]]; then
-  log "Không phải Wayland → bỏ qua monitors.xml."
-fi
-
-# 3) Mode/refresh thật (Wayland)
-WIDTH=""; HEIGHT=""; RATE=""; CONNECTOR=""; DRM_CONNECTED=""
-if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-  for s in /sys/class/drm/*/status; do
-    [[ -f "$s" ]] || continue
-    if [[ "$(cat "$s")" == "connected" ]]; then
-      DRM_CONNECTED="$(basename "$(dirname "$s")")"; break
-    fi
-  done
-
-  if [[ -n "$DRM_CONNECTED" ]]; then
-    CONNECTOR="${DRM_CONNECTED#card*-}"
-    MODES_FILE="/sys/class/drm/${DRM_CONNECTED}/modes"
-    if [[ -f "$MODES_FILE" ]]; then
-      mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
-
-      LAST_W=""; LAST_H=""; LAST_R=""
-      MON_FILE="$HOME/.config/monitors.xml"
-      if [[ -r "$MON_FILE" ]]; then
-        LAST_W="$(sed -n 's/.*<width>\([0-9]\+\)<\/width>.*/\1/p' "$MON_FILE" | head -n1 || true)"
-        LAST_H="$(sed -n 's/.*<height>\([0-9]\+\)<\/height>.*/\1/p' "$MON_FILE" | head -n1 || true)"
-        LAST_R="$(sed -n 's/.*<rate>\([0-9.]\+\)<\/rate>.*/\1/p' "$MON_FILE" | head -n1 || true)"
-      fi
-      CAND_R=("${REAL_MODES[@]}")
-      if [[ -n "$LAST_W$LAST_H" && ${#CAND_R[@]} -gt 1 ]]; then
-        tmp=(); for r in "${CAND_R[@]}"; do w="${r%x*}"; h="${r#*x}"; [[ "$w" != "$LAST_W" || "$h" != "$LAST_H" ]] && tmp+=("$r"); done; CAND_R=("${tmp[@]}")
-      fi
-      PICK="${CAND_R[$((RANDOM % ${#CAND_R[@]}))]}"
-      WIDTH="${PICK%x*}"; HEIGHT="${PICK#*x}"
-
-      command -v modetest >/dev/null 2>&1 || { sudo apt-get update -y >/dev/null 2>&1 || true; sudo apt-get install -y libdrm-tests >/dev/null 2>&1 || true; }
-      if command -v modetest >/dev/null 2>&1; then
-        # LẤY DANH SÁCH REFRESH; dùng biến 'inside' thay cho 'in'
-        mapfile -t RATES < <(modetest -c 2>/dev/null | awk -v c="$CONNECTOR" -v w="$WIDTH" -v h="$HEIGHT" '
-          $0 ~ "^Connector .*\\(" c "\\):" {inside=1; next}
-          inside && /^Connector / {inside=0}
-          inside && $1 ~ /^[0-9]+x[0-9]+$/ {
-            split($1,xy,"x"); if (xy[1]==w && xy[2]==h) {
-              rate=$2; raw=$0; gsub(/[^0-9.]/,"",rate);
-              if (index(raw,"*")) print rate"*"; else print rate;
-            }
-          }' | awk 'NF' | awk '!seen[$0]++')
-        [[ ${#RATES[@]} -eq 0 ]] && RATES=("60.00")
-        if [[ -n "$LAST_R" && ${#RATES[@]} -gt 1 ]]; then
-          tmp=(); for r in "${RATES[@]}"; do base="${r%\*}"; [[ "$base" != "$LAST_R" ]] && tmp+=("$r"); done; RATES=("${tmp[@]}")
-        fi
-        WEIGHTED=()
-        for r in "${RATES[@]}"; do
-          [[ "$r" == *"*" ]] && WEIGHTED+=("${r%\*}" "${r%\*}" "${r%\*}") || WEIGHTED+=("$r")
-        done
-        RATE="${WEIGHTED[$((RANDOM % ${#WEIGHTED[@]}))]}"
-      else
-        RATE="${LAST_R:-60.00}"
-      fi
-    fi
-  fi
-fi
-
-# 4) EDID & DPI → chọn text-scale
-AUTO_TEXT=""
-if [[ "$TEXT_SCALE" == "auto" ]]; then
-  WIDTH_CM=""; HEIGHT_CM=""
-  if [[ -n "${DRM_CONNECTED:-}" && -r "/sys/class/drm/${DRM_CONNECTED}/edid" ]]; then
-    command -v edid-decode >/dev/null 2>&1 || { sudo apt-get update -y >/dev/null 2>&1 || true; sudo apt-get install -y edid-decode >/dev/null 2>&1 || true; }
-    if command -v edid-decode >/dev/null 2>&1; then
-      EDID_DEC="$(edid-decode "/sys/class/drm/${DRM_CONNECTED}/edid" 2>/dev/null || true)"
-      SIZE_LINE="$(awk '/Maximum image size:|Screen size:/{print; exit}' <<<"$EDID_DEC")"
-      WIDTH_CM="$(sed -n 's/.*: *\([0-9]\+\) *cm *x *\([0-9]\+\) *cm.*/\1/p' <<<"$SIZE_LINE" | head -n1)"
-      HEIGHT_CM="$(sed -n 's/.*: *\([0-9]\+\) *cm *x *\([0-9]\+\) *cm.*/\2/p' <<<"$SIZE_LINE" | head -n1)"
-    fi
-  fi
-  if [[ -n "${WIDTH_CM:-}" && -n "${HEIGHT_CM:-}" && -n "${WIDTH:-}" && -n "${HEIGHT:-}" ]]; then
-    DPI_X="$(awk -v px="$WIDTH" -v cm="$WIDTH_CM" 'BEGIN{print px/(cm/2.54)}')"
-    DPI_Y="$(awk -v px="$HEIGHT" -v cm="$HEIGHT_CM" 'BEGIN{print px/(cm/2.54)}')"
-    DPI="$(awk -v x="$DPI_X" -v y="$DPI_Y" 'BEGIN{print (x+y)/2.0}')"
-    BASE="$(awk -v d="$DPI" 'BEGIN{
-      s=1.00;
-      if(d>=110 && d<125) s=1.10;
-      else if(d>=125 && d<140) s=1.20;
-      else if(d>=140 && d<150) s=1.25;
-      else if(d>=150 && d<170) s=1.33;
-      else if(d>=170 && d<200) s=1.50;
-      else if(d>=200) s=2.00;
-      printf "%.2f", s;
-    }')"
-    SCALES_SORTED=(1.00 1.10 1.15 1.20 1.25 1.33 1.50 1.75 2.00)
-    b=0; bestd=999
-    for i in "${!SCALES_SORTED[@]}"; do
-      d="$(float_absdiff "${SCALES_SORTED[$i]}" "$BASE")"
-      if [[ "$(float_lt "$d" "$bestd")" == "1" ]]; then b=$i; bestd="$d"; fi
-    done
-    cand_idx=(); [[ $b -gt 0 ]] && cand_idx+=($((b-1))); cand_idx+=($b); [[ $b -lt $((${#SCALES_SORTED[@]}-1)) ]] && cand_idx+=($((b+1)))
-    CUR_SCALE="$(gsettings get org.gnome.desktop.interface text-scaling-factor 2>/dev/null | tr -d "'" || true)"
-    CANDS=()
-    for id in "${cand_idx[@]}"; do
-      val="${SCALES_SORTED[$id]}"
-      [[ -n "$CUR_SCALE" && "$val" == "$CUR_SCALE" && ${#cand_idx[@]} -gt 1 ]] && continue
-      CANDS+=("$val")
-    done
-    [[ ${#CANDS[@]} -eq 0 ]] && CANDS=("${SCALES_SORTED[$b]}")
-    AUTO_TEXT="${CANDS[$((RANDOM % ${#CANDS[@]}))]}"
-    log "DPI≈$(printf '%.1f' "${DPI}") → text-scale (random quanh hợp lý) ${AUTO_TEXT}"
+detect_user(){
+  # Lấy user thật để restart user services
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    RUN_USER="$SUDO_USER"
   else
-    CUR_SCALE="$(gsettings get org.gnome.desktop.interface text-scaling-factor 2>/dev/null | tr -d "'" || true)"
-    t=("${POPULAR_SCALES[@]}")
-    if [[ -n "$CUR_SCALE" && ${#t[@]} -gt 1 ]]; then
-      tmp=(); for s in "${t[@]}"; do [[ "$s" != "$CUR_SCALE" ]] && tmp+=("$s"); done; t=("${tmp[@]}")
-    fi
-    AUTO_TEXT="${t[$((RANDOM % ${#t[@]}))]}"
-    log "Không có kích thước vật lý từ EDID → text-scale phổ biến ${AUTO_TEXT}"
+    RUN_USER="$(logname 2>/dev/null || who | awk '{print $1; exit}')"
   fi
-fi
+  [[ -z "$RUN_USER" ]] && die "Không xác định được user để restart services."
+}
 
-TARGET_TEXT_SCALE="$TEXT_SCALE"
-[[ "$TEXT_SCALE" == "auto" ]] && TARGET_TEXT_SCALE="$AUTO_TEXT"
-[[ -z "$TARGET_TEXT_SCALE" ]] && TARGET_TEXT_SCALE="1.00"
-command -v gsettings >/dev/null 2>&1 && gsettings set org.gnome.desktop.interface text-scaling-factor "$TARGET_TEXT_SCALE" || true
-log "Text scaling factor: $TARGET_TEXT_SCALE"
+# ---------- Arg parse ----------
+RATE="48000"
+Q_AUTO="1"; QUANTUM="1024"
+DO_RENAME="1"
+ROTATE_WEEKLY="0"
+DO_REVERT="0"
+DO_VMX_HINT="0"
 
-WAYLAND_SCALE="$(nearest_wayland_scale "$TARGET_TEXT_SCALE")"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rate) RATE="$2"; shift 2;;
+    --quantum) Q_AUTO="0"; QUANTUM="$2"; shift 2;;
+    --no-rename) DO_RENAME="0"; shift;;
+    --rotate-weekly) ROTATE_WEEKLY="1"; shift;;
+    --revert) DO_REVERT="1"; shift;;
+    --vmx-hint) DO_VMX_HINT="1"; shift;;
+    -h|--help)
+      cat <<HLP
+Usage: sudo $0 [--rate 48000] [--quantum 1024] [--no-rename] [--rotate-weekly] [--revert] [--vmx-hint]
+HLP
+      exit 0;;
+    *) die "Option không hợp lệ: $1";;
+  esac
+done
 
-# 5) monitors.xml (Wayland) — EDID tags nếu có
-if [[ "${XDG_SESSION_TYPE:-}" == "wayland" && -n "${CONNECTOR:-}" && -n "${WIDTH:-}" && -n "${HEIGHT:-}" && -n "${RATE:-}" ]]; then
-  VENDOR=""; PRODUCT=""; SERIAL=""
-  if [[ -r "/sys/class/drm/${DRM_CONNECTED}/edid" ]]; then
-    command -v edid-decode >/dev/null 2>&1 || { sudo apt-get update -y >/dev/null 2>&1 || true; sudo apt-get install -y edid-decode >/dev/null 2>&1 || true; }
-    if command -v edid-decode >/dev/null 2>&1; then
-      EDID_DEC="$(edid-decode "/sys/class/drm/${DRM_CONNECTED}/edid" 2>/dev/null || true)"
-      VENDOR="$(awk '/Manufacturer:/{print $2; exit}' <<<"$EDID_DEC" | tr -cd 'A-Za-z0-9._-')"
-      PRODUCT="$(awk '/Product Code:/{print $3; exit}' <<<"$EDID_DEC" | tr -cd 'A-Za-z0-9x._-')"
-      SERIAL="$(awk '/Serial Number:/{print $3; exit}' <<<"$EDID_DEC" | tr -cd 'A-Za-z0-9x._-')"
-    fi
+# ---------- Package ensure ----------
+ensure_packages(){
+  info "Đảm bảo PipeWire/WirePlumber/ALSA đã cài..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y --no-install-recommends \
+    pipewire pipewire-audio pipewire-pulse wireplumber libspa-0.2-modules alsa-utils
+}
+
+# ---------- Hardware detection ----------
+detect_model_and_codec(){
+  # Lấy chuỗi model PCI audio
+  local LSPCI="$(lspci -nn | grep -i audio || true)"
+  MODEL="$(echo "$LSPCI" | head -n1)"
+  [[ -z "$MODEL" ]] && MODEL="(unknown audio device)"
+
+  # Tìm codec Realtek ALC nếu có
+  CODEC=""
+  if ls /proc/asound/ 1>/dev/null 2>&1; then
+    while read -r f; do
+      [[ -f "$f" ]] || continue
+      local line
+      line="$(grep -m1 -E '^Codec:' "$f" || true)"
+      if echo "$line" | grep -qi 'Realtek ALC'; then
+        CODEC="$(echo "$line" | sed 's/^Codec:\s*//')"
+        break
+      fi
+    done < <(ls /proc/asound/card*/codec* 2>/dev/null || true)
   fi
 
-  log "Connector: $CONNECTOR"
-  log "Chọn ${WIDTH}x${HEIGHT}@${RATE}, wayland-scale=${WAYLAND_SCALE}"
-  [[ -n "$VENDOR$PRODUCT$SERIAL" ]] && log "EDID: vendor=$VENDOR product=$PRODUCT serial=$SERIAL"
+  # Lấy tên aplay -l để tham khảo
+  APLAY_NAME="$(aplay -l 2>/dev/null | grep -m1 '^card ' || true)"
+}
 
-  MON_DIR="$HOME/.config"; MON_FILE="$MON_DIR/monitors.xml"; mkdir -p "$MON_DIR"
-  [[ -f "$MON_FILE" ]] && cp -f "$MON_FILE" "$MON_FILE.bak" && log "Đã sao lưu: $MON_FILE.bak"
+derive_labels(){
+  # Mặc định: không ghi đè gì, chỉ nếu DO_RENAME=1 thì đặt cho KHỚP thực tế
+  if [[ "$DO_RENAME" -eq 0 ]]; then
+    NICK="(unchanged)"; DESC="(unchanged)"; return
+  fi
 
-  cat > "$MON_FILE" <<EOF
-<monitors version="2">
-  <configuration>
-    <logicalmonitor>
-      <x>0</x>
-      <y>0</y>
-      <scale>${WAYLAND_SCALE}</scale>
-      <transform>normal</transform>
-      <monitor>
-        <monitorspec>
-          <connector>${CONNECTOR}</connector>
-$( [[ -n "$VENDOR"  ]] && printf "          <vendor>%s</vendor>\n"  "$VENDOR"  )
-$( [[ -n "$PRODUCT" ]] && printf "          <product>%s</product>\n" "$PRODUCT" )
-$( [[ -n "$SERIAL"  ]] && printf "          <serial>%s</serial>\n"  "$SERIAL"  )
-        </monitorspec>
-        <mode>
-          <width>${WIDTH}</width>
-          <height>${HEIGHT}</height>
-          <rate>${RATE}</rate>
-        </mode>
-      </monitor>
-      <primary>yes</primary>
-    </logicalmonitor>
-  </configuration>
-</monitors>
+  local model_low="$(echo "$MODEL" | tr '[:upper:]' '[:lower:]')"
+  if echo "$model_low" | grep -q 'es1371'; then
+    # VMware ES1371 (AudioPCI)
+    NICK="Ensoniq AudioPCI ES1371"
+    DESC="Sound Blaster PCI 128 (ES1371)"
+  elif echo "$model_low" | grep -Eq 'hd audio|ich9|intel.*audio|hdaudio'; then
+    if [[ -n "$CODEC" ]]; then
+      # Ví dụ: "Realtek ALC887 HD Audio"
+      local alc="$(echo "$CODEC" | sed -n 's/.*\(Realtek ALC[0-9A-Za-z]\+\).*/\1/p')"
+      if [[ -n "$alc" ]]; then
+        NICK="$alc"
+        DESC="$alc HD Audio"
+      else
+        NICK="HDA Intel PCH"
+        DESC="Built-in Audio HD (PCH)"
+      fi
+    else
+      NICK="HDA Intel PCH"
+      DESC="Built-in Audio HD (PCH)"
+    fi
+  else
+    # Fallback an toàn
+    NICK="HDA Intel PCH"
+    DESC="Built-in Audio HD (PCH)"
+  fi
+}
+
+# ---------- PipeWire config ----------
+pick_quantum(){
+  # Mặc định 1024; nếu --rotate-weekly thì thay đổi NHẸ theo tuần
+  if [[ "$Q_AUTO" -eq 0 ]]; then
+    return
+  fi
+  if [[ "$ROTATE_WEEKLY" -eq 1 ]]; then
+    # Sử dụng năm+tuần → xoay giữa 512/1024/2048 (nhẹ, không đụng sample-rate)
+    local wk="$(date +%G%V)"
+    case $((wk % 3)) in
+      0) QUANTUM="512";;
+      1) QUANTUM="1024";;
+      2) QUANTUM="2048";;
+    esac
+  else
+    QUANTUM="1024"
+  fi
+}
+
+bounds_for_quantum(){
+  case "$QUANTUM" in
+    512)  MINQ="256";  MAXQ="1024";;
+    1024) MINQ="512";  MAXQ="2048";;
+    2048) MINQ="512";  MAXQ="4096";;
+    *)    die "Quantum không hợp lệ: $QUANTUM (chỉ 512/1024/2048)";;
+  esac
+}
+
+write_pw_conf(){
+  mkdir -p "$PW_DIR"
+  cat > "$PW_FILE" <<EOF
+# Generated by audio-persona-linux.sh (Ubuntu 24.04)
+context.properties = {
+  default.clock.rate          = ${RATE}
+  default.clock.allowed-rates = [ 48000 44100 ]
+  default.clock.quantum       = ${QUANTUM}
+  default.clock.min-quantum   = ${MINQ}
+  default.clock.max-quantum   = ${MAXQ}
+}
+EOF
+}
+
+write_wp_rule(){
+  [[ "$DO_RENAME" -eq 0 ]] && return
+  mkdir -p "$WP_DIR"
+  cat > "$WP_FILE" <<EOF
+-- Generated by audio-persona-linux.sh
+-- Đặt nhãn khớp HÀNG THẬT đã dò được
+local rule = {
+  matches = { { { "device.api", "equals", "alsa" } } },
+  apply_properties = {
+    ["device.nick"]        = "${NICK}",
+    ["device.description"] = "${DESC}"
+  }
+}
+alsa_monitor.rules = alsa_monitor.rules or {}
+table.insert(alsa_monitor.rules, rule)
+EOF
+}
+
+restart_user_services(){
+  info "Khởi động lại PipeWire/WirePlumber cho user: $RUN_USER"
+  loginctl enable-linger "$RUN_USER" >/dev/null 2>&1 || true
+  sudo -u "$RUN_USER" systemctl --user daemon-reload || true
+  sudo -u "$RUN_USER" systemctl --user restart pipewire pipewire-pulse wireplumber || true
+}
+
+revert_all(){
+  info "Gỡ cấu hình đã áp dụng..."
+  rm -f "$PW_FILE" "$WP_FILE"
+  restart_user_services
+  info "Đã hoàn nguyên."
+}
+
+vmx_hint(){
+  cat <<'EOH'
+# Gợi ý cấu hình .vmx (HOST, khi VM tắt) để nhất quán Linux:
+sound.present = "TRUE"
+sound.autodetect = "TRUE"
+sound.virtualDev = "hdaudio"   # Intel HD Audio (tự nhiên nhất trên Linux)
+EOH
+}
+
+print_summary(){
+  echo "------------------------------------------------------------"
+  echo "  Audio Persona (Linux) — applied"
+  echo "------------------------------------------------------------"
+  echo " Model (lspci):   $MODEL"
+  [[ -n "$CODEC" ]] && echo " Codec:          $CODEC"
+  [[ -n "$APLAY_NAME" ]] && echo " aplay -l:       $APLAY_NAME"
+  echo " Sample-rate:     ${RATE} Hz"
+  echo " Quantum:         ${QUANTUM} (min ${MINQ} / max ${MAXQ})"
+  if [[ "$DO_RENAME" -eq 1 ]]; then
+    echo " Nick/Desc:       ${NICK} / ${DESC}"
+  else
+    echo " Nick/Desc:       (không thay đổi)"
+  fi
+  echo " Files:"
+  echo "  - $PW_FILE"
+  [[ "$DO_RENAME" -eq 1 ]] && echo "  - $WP_FILE"
+  echo "------------------------------------------------------------"
+  echo " Kiểm tra: wpctl status | sed -n '/Audio/,/Video/p'"
+  echo " Trong Console: new (AudioContext||webkitAudioContext)().sampleRate"
+}
+
+main(){
+  need_root
+  detect_user
+
+  if [[ "$DO_VMX_HINT" -eq 1 ]]; then
+    vmx_hint; exit 0
+  fi
+
+  if [[ "$DO_REVERT" -eq 1 ]]; then
+    revert_all; exit 0
+  fi
+
+  ensure_packages
+  detect_model_and_codec
+  derive_labels
+  pick_quantum
+  bounds_for_quantum
+  write_pw_conf
+  write_wp_rule
+  restart_user_services
+  print_summary
+}
+
+main "$@"
 EOF
 
-  log "Đã ghi $MON_FILE — Wayland sẽ nạp khi đăng nhập mới."
-  log "→ Đăng xuất nhanh: gnome-session-quit --logout --no-prompt"
-fi
-
-log "DONE."
+# 2) Cấp quyền và chạy (ổn định, tự nhiên chuẩn Linux 48 kHz)
+chmod +x audio-persona-linux.sh
+sudo SUDO_USER=$USER ./audio-persona-linux.sh
