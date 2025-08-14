@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Ubuntu 24.04 + Wayland — Random fingerprint MỖI LẦN CHẠY (100% dựa trên phần cứng)
-# - Không fake EDID/mode/refresh; chỉ chọn thứ phần cứng khai báo thật
-# - Random mỗi lần: độ phân giải, refresh, text scale, font ưu tiên (tránh lặp cấu hình trước)
-# - Sửa lỗi thoát sớm: KHÔNG dùng `set -eE`/trap ERR; các so sánh không trả về non-zero
+# Fix: tránh dùng biến 'in' trong awk (mawk coi là keyword) → đổi thành 'inside'
 
 set -u -o pipefail
 [[ "${DEBUG:-0}" == "1" ]] && set -x
@@ -10,8 +8,8 @@ shopt -s nullglob
 
 log() { printf '[%(%F %T)T] %s\n' -1 "$*"; }
 
-TEXT_SCALE="${TEXT_SCALE:-auto}"     # auto | số thực (vd 1.25)
-INSTALL_FONTS="${INSTALL_FONTS:-1}"  # 1 cài thêm font phổ biến, 0 bỏ qua
+TEXT_SCALE="${TEXT_SCALE:-auto}"
+INSTALL_FONTS="${INSTALL_FONTS:-1}"
 
 POPULAR_SCALES=(1.00 1.00 1.10 1.15 1.20 1.25 1.25 1.33 1.50)
 WAYLAND_STEPS=(1.00 1.25 1.50 1.75 2.00)
@@ -31,11 +29,11 @@ nearest_wayland_scale() {
   printf "%.2f" "$best"
 }
 
-# 0) Thông tin hệ
+# 0) Info
 command -v lsb_release >/dev/null 2>&1 && log "Distro: $(lsb_release -ds)"
 log "Session type: ${XDG_SESSION_TYPE:-unknown}"
 
-# 1) Fonts phổ biến (không xóa gì)
+# 1) Fonts
 if [[ "$INSTALL_FONTS" == "1" ]]; then
   sudo apt-get update -y >/dev/null 2>&1 || true
   sudo apt-get install -y \
@@ -52,7 +50,6 @@ else
   log "Bỏ qua cài font (INSTALL_FONTS=0)."
 fi
 
-# 2) Ưu tiên 1 sans-serif đang có thật (random mỗi lần, tránh lặp nếu có file cũ)
 command -v fc-list >/dev/null 2>&1 || sudo apt-get install -y fontconfig >/dev/null 2>&1 || true
 PREF_SANS_CANDIDATES=("Ubuntu" "Noto Sans" "DejaVu Sans" "Liberation Sans" "Cantarell" "Roboto")
 INSTALLED_SANS=()
@@ -69,7 +66,6 @@ if [[ -r "$FC_FILE" ]]; then
   LAST_PREF_HEAD="$(sed -n '/<family>sans-serif<\/family>/,/<\/prefer>/p' "$FC_FILE" \
     | sed -n 's/ *<family>\(.*\)<\/family>.*/\1/p' | head -n1 || true)"
 fi
-# chọn khác lần trước nếu được
 CANDS=("${INSTALLED_SANS[@]}")
 if [[ -n "$LAST_PREF_HEAD" && ${#CANDS[@]} -gt 1 ]]; then
   tmp=(); for s in "${CANDS[@]}"; do [[ "$s" != "$LAST_PREF_HEAD" ]] && tmp+=("$s"); done; CANDS=("${tmp[@]}")
@@ -122,19 +118,18 @@ EOF
 command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
 log "fonts.conf đã cập nhật (tự nhiên hơn)."
 
-# 3) Nếu không Wayland: chỉ random text-scale rồi thoát phần hiển thị
+# 2) Nếu không Wayland, bỏ qua monitors.xml
 if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]]; then
   log "Không phải Wayland → bỏ qua monitors.xml."
 fi
 
-# 4) Lấy mode/refresh thật từ phần cứng (Wayland)
+# 3) Mode/refresh thật (Wayland)
 WIDTH=""; HEIGHT=""; RATE=""; CONNECTOR=""; DRM_CONNECTED=""
 if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
   for s in /sys/class/drm/*/status; do
     [[ -f "$s" ]] || continue
     if [[ "$(cat "$s")" == "connected" ]]; then
-      DRM_CONNECTED="$(basename "$(dirname "$s")")"
-      break
+      DRM_CONNECTED="$(basename "$(dirname "$s")")"; break
     fi
   done
 
@@ -143,7 +138,7 @@ if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
     MODES_FILE="/sys/class/drm/${DRM_CONNECTED}/modes"
     if [[ -f "$MODES_FILE" ]]; then
       mapfile -t REAL_MODES < <(sed -e 's/[[:space:]]*$//' "$MODES_FILE" | awk '!seen[$0]++')
-      # random 1 mode thật; nếu có config cũ, tránh lặp width/height
+
       LAST_W=""; LAST_H=""; LAST_R=""
       MON_FILE="$HOME/.config/monitors.xml"
       if [[ -r "$MON_FILE" ]]; then
@@ -158,13 +153,13 @@ if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
       PICK="${CAND_R[$((RANDOM % ${#CAND_R[@]}))]}"
       WIDTH="${PICK%x*}"; HEIGHT="${PICK#*x}"
 
-      # refresh list dùng modetest (ưu tiên có '*'), random khác lần trước nếu có
       command -v modetest >/dev/null 2>&1 || { sudo apt-get update -y >/dev/null 2>&1 || true; sudo apt-get install -y libdrm-tests >/dev/null 2>&1 || true; }
       if command -v modetest >/dev/null 2>&1; then
+        # LẤY DANH SÁCH REFRESH; dùng biến 'inside' thay cho 'in'
         mapfile -t RATES < <(modetest -c 2>/dev/null | awk -v c="$CONNECTOR" -v w="$WIDTH" -v h="$HEIGHT" '
-          $0 ~ "^Connector .*\\(" c "\\):" {in=1; next}
-          in && /^Connector / {in=0}
-          in && $1 ~ /^[0-9]+x[0-9]+$/ {
+          $0 ~ "^Connector .*\\(" c "\\):" {inside=1; next}
+          inside && /^Connector / {inside=0}
+          inside && $1 ~ /^[0-9]+x[0-9]+$/ {
             split($1,xy,"x"); if (xy[1]==w && xy[2]==h) {
               rate=$2; raw=$0; gsub(/[^0-9.]/,"",rate);
               if (index(raw,"*")) print rate"*"; else print rate;
@@ -186,7 +181,7 @@ if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
   fi
 fi
 
-# 5) EDID & DPI → chọn text-scale (random hợp lý quanh DPI hoặc mốc phổ biến)
+# 4) EDID & DPI → chọn text-scale
 AUTO_TEXT=""
 if [[ "$TEXT_SCALE" == "auto" ]]; then
   WIDTH_CM=""; HEIGHT_CM=""
@@ -214,7 +209,6 @@ if [[ "$TEXT_SCALE" == "auto" ]]; then
       printf "%.2f", s;
     }')"
     SCALES_SORTED=(1.00 1.10 1.15 1.20 1.25 1.33 1.50 1.75 2.00)
-    # chọn lân cận BASE (ngẫu nhiên)
     b=0; bestd=999
     for i in "${!SCALES_SORTED[@]}"; do
       d="$(float_absdiff "${SCALES_SORTED[$i]}" "$BASE")"
@@ -250,7 +244,7 @@ log "Text scaling factor: $TARGET_TEXT_SCALE"
 
 WAYLAND_SCALE="$(nearest_wayland_scale "$TARGET_TEXT_SCALE")"
 
-# 6) monitors.xml (Wayland): vendor/product/serial từ EDID (nếu có)
+# 5) monitors.xml (Wayland) — EDID tags nếu có
 if [[ "${XDG_SESSION_TYPE:-}" == "wayland" && -n "${CONNECTOR:-}" && -n "${WIDTH:-}" && -n "${HEIGHT:-}" && -n "${RATE:-}" ]]; then
   VENDOR=""; PRODUCT=""; SERIAL=""
   if [[ -r "/sys/class/drm/${DRM_CONNECTED}/edid" ]]; then
