@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# audiofp-persist.sh (v3.1)
-# Ubuntu 24.04 (Wayland) + PipeWire/WirePlumber
-# - KHÔNG tham số => auto-apply random model (hợp với: bash <(wget -qO- 'http://...'))
-# - Tự động cài phụ thuộc qua apt nếu thiếu (sudo apt update && sudo apt install -y ...)
-# - Lệnh có sẵn: models / apply / rotate / status / revert / install-deps
+# audiofp-persist.sh (v3.2)
+# Ubuntu 24.04 + Wayland + PipeWire/WirePlumber
+# - KHÔNG tham số => auto-apply random model
+# - --force-channels <1|2|6|8>  (ép số kênh)
+# - --latency-class <low|mid|high>  (ép quantum: 128/256/(512|1024))
+# - Tự cài deps nếu thiếu (sudo apt update && sudo apt install -y pipewire-bin wireplumber pulseaudio-utils)
 
 set -euo pipefail
 
@@ -152,12 +153,10 @@ ensure_deps() {
   need pw-metadata || missing+=("pipewire-bin")
   need wpctl        || missing+=("wireplumber")
   need pactl        || missing+=("pulseaudio-utils")
-  need systemctl    || true  # luôn có trên Ubuntu
-
+  need systemctl    || true
   if ((${#missing[@]})); then
     echo ">> Thiếu: ${missing[*]}"
     install_deps
-    # kiểm tra lại sau khi cài
     need pw-metadata && need wpctl && need pactl || {
       echo ">> Vẫn thiếu công cụ sau khi cài. Kiểm tra lại cài đặt."
       exit 1
@@ -203,6 +202,7 @@ get_params_from_model() {
   echo "$model|$rate|$quantum|$desc|$ch"
 }
 
+# Map kênh -> channel_map
 channel_map_for() {
   case "$1" in
     1) echo "mono" ;;
@@ -210,6 +210,17 @@ channel_map_for() {
     6) echo "front-left,front-right,front-center,lfe,rear-left,rear-right" ;;
     8) echo "front-left,front-right,front-center,lfe,rear-left,rear-right,side-left,side-right" ;;
     *) echo "front-left,front-right" ;;
+  esac
+}
+
+# Map latency-class -> quantum
+quantum_from_latency_class() {
+  case "$1" in
+    low)  echo "128" ;;
+    mid)  echo "256" ;;
+    high) # cho tự nhiên: 512 hoặc 1024
+      if ((RANDOM % 2)); then echo "512"; else echo "1024"; fi ;;
+    *)    echo "" ;;
   esac
 }
 
@@ -238,30 +249,40 @@ EOF
 
 write_helper_script() {
   local vsink_name="$1" desc="$2" ch="$3" chmap="$4"
-  cat > "$HELPER" <<EOF
+  cat > "$HELPER" <<'EOSH'
 #!/usr/bin/env bash
 set -euo pipefail
-VSINK="$vsink_name"
-DESC="$desc"
-CH="$ch"
-CHMAP="$chmap"
+VSINK="{{VSINK}}"
+DESC="{{DESC}}"
+CH="{{CH}}"
+CHMAP="{{CHMAP}}"
 
 # Gỡ module cũ
-pactl list short modules | awk '/audiofp_vsink|module-virtual-sink/ {print \$1}' | xargs -r -n1 pactl unload-module || true
+pactl list short modules | awk '/audiofp_vsink|module-virtual-sink/ {print $1}' | xargs -r -n1 pactl unload-module || true
 
 # Master phần cứng
-MASTER=\$(pactl list short sinks | awk '{print \$2}' | grep -E '^(alsa_output|bluez_output)\\.' | head -n1)
-[[ -z "\${MASTER:-}" ]] && exit 0
+MASTER=$(pactl list short sinks | awk '{print $2}' | grep -E '^(alsa_output|bluez_output)\.' | head -n1)
+[[ -z "${MASTER:-}" ]] && exit 0
+
+# Nếu ép 6/8 kênh nhưng master là analog-stereo hoặc bluetooth thì hạ về 2 kênh cho an toàn
+if [[ "$CH" -ge 6 ]]; then
+  if [[ "$MASTER" == *"analog-stereo"* || "$MASTER" == *"bluez_output"* ]]; then
+    CH="2"
+    CHMAP="front-left,front-right"
+  fi
+fi
 
 # Virtual sink nối về master
-pactl load-module module-virtual-sink "sink_name=\$VSINK sink_properties=node.description='\$DESC' master=\$MASTER channels=\$CH channel_map=\$CHMAP" >/dev/null
+pactl load-module module-virtual-sink "sink_name=$VSINK sink_properties=node.description='$DESC' master=$MASTER channels=$CH channel_map=$CHMAP" >/dev/null
 
 # Đặt default
-pactl set-default-sink "\$VSINK" || true
+pactl set-default-sink "$VSINK" || true
 
 # Yêu cầu WirePlumber lưu default targets
 wpctl settings --save node.restore-default-targets true >/dev/null 2>&1 || true
-EOF
+EOSH
+  # thay placeholder
+  sed -i "s|{{VSINK}}|$vsink_name|g; s|{{DESC}}|$desc|g; s|{{CH}}|$ch|g; s|{{CHMAP}}|$chmap|g" "$HELPER"
   chmod +x "$HELPER"
 }
 
@@ -284,10 +305,25 @@ EOF
 
 apply_profile() {
   ensure_deps
-  local model="${1:-}"
-  [[ -z "$model" || "${MODEL_RATES[$model]+isset}" != "isset" ]] && model="$(pick_model_random)"
+  local model="${1:-}" force_ch="${2:-}" latency_class="${3:-}"
 
+  [[ -z "$model" || "${MODEL_RATES[$model]+isset}" != "isset" ]] && model="$(pick_model_random)"
   IFS='|' read -r model rate quantum desc ch <<<"$(get_params_from_model "$model")"
+
+  # Override channels nếu có
+  if [[ -n "${force_ch:-}" ]]; then
+    case "$force_ch" in
+      1|2|6|8) ch="$force_ch" ;;
+      *) echo ">> --force-channels chỉ nhận 1|2|6|8"; exit 1 ;;
+    esac
+  fi
+
+  # Override quantum theo latency-class nếu có
+  if [[ -n "${latency_class:-}" ]]; then
+    q_override="$(quantum_from_latency_class "$latency_class")" || true
+    [[ -n "$q_override" ]] && quantum="$q_override"
+  fi
+
   local vsink="audiofp_vsink_${model}_${rate}_${RANDOM}"
   local chmap; chmap="$(channel_map_for "$ch")"
 
@@ -312,10 +348,10 @@ apply_profile() {
   } > "$STATE_DIR/last_profile.conf"
 
   echo ">> APPLIED: model=$model | rate=${rate} Hz | quantum=${quantum} | ch=${ch} | desc='${desc}'"
-  echo ">> Thoát hẳn và mở lại Chrome/Chromium để WebAudio nhận sample rate mới."
+  echo ">> Thoát hẳn và mở lại Chrome/Chromium để WebAudio nhận sample rate & latency mới."
 }
 
-rotate_profile() { apply_profile "$1"; }
+rotate_profile() { apply_profile "$1" "$2" "$3"; }
 
 revert_all() {
   echo ">> Reverting AudioFP to defaults…"
@@ -347,39 +383,44 @@ status() {
 usage() {
   cat <<EOF
 Usage:
-  $0 models                       # Liệt kê model
-  $0 apply [--model <name>]       # Áp dụng profile bền vững
-  $0 rotate [--model <name>]      # Đổi profile khác
-  $0 status                       # Trạng thái
-  $0 revert                       # Trả về mặc định
-  $0 install-deps                 # Chỉ cài phụ thuộc rồi thoát
-
-Mặc định (không có tham số): auto-apply ngẫu nhiên.
-Ví dụ:
-  $0                              # Auto apply (random model)
-  $0 apply --model htpc-nvidia-hdmi
-  $0 rotate --model usb-dac-focusrite
   $0 models
+  $0 apply [--model <name>] [--force-channels <1|2|6|8>] [--latency-class <low|mid|high>]
+  $0 rotate [--model <name>] [--force-channels <1|2|6|8>] [--latency-class <low|mid|high>]
+  $0 status
+  $0 revert
+  $0 install-deps
+
+Mặc định (không tham số): auto-apply random model.
+Ví dụ:
+  $0                                  # Auto apply (random)
+  $0 apply --model htpc-nvidia-hdmi --force-channels 8 --latency-class low
+  $0 apply --model bluetooth-a2dp --latency-class high
+  $0 rotate --force-channels 6 --latency-class mid
 EOF
 }
 
 # ====== ARG PARSER ======
 cmd="${1:-}"; shift || true
 model=""
+force_channels=""
+latency_class=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model) model="${2:-}"; shift 2 || true ;;
+    --model)           model="${2:-}"; shift 2 || true ;;
+    --force-channels)  force_channels="${2:-}"; shift 2 || true ;;
+    --latency-class)   latency_class="${2:-}"; shift 2 || true ;;
     *) break ;;
   esac
 done
 
 case "${cmd:-}" in
   models)        list_models ;;
-  apply)         apply_profile "$model" ;;
-  rotate)        rotate_profile "$model" ;;
+  apply)         apply_profile "$model" "$force_channels" "$latency_class" ;;
+  rotate)        rotate_profile "$model" "$force_channels" "$latency_class" ;;
   status)        status ;;
   revert)        revert_all ;;
   install-deps)  install_deps ;;
-  "")            echo "No arguments supplied => auto-apply random model"; apply_profile "" ;;
+  "")            echo "No arguments supplied => auto-apply random model"; apply_profile "" "" "" ;;
   *)             usage; exit 1 ;;
 esac
