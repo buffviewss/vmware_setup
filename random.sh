@@ -800,37 +800,37 @@ esac
 # =============================
 # 4. ClientRects – Metrics change
 # =============================
-HINTING_OPTIONS=("true" "false")
-ANTIALIAS_OPTIONS=("true" "false")
-SUBPIXEL_OPTIONS=("rgb" "bgr" "vrgb" "vbgr" "none")
-RANDOM_HINTING=${HINTING_OPTIONS[$RANDOM % ${#HINTING_OPTIONS[@]}]}
-RANDOM_ANTIALIAS=${ANTIALIAS_OPTIONS[$RANDOM % ${#ANTIALIAS_OPTIONS[@]}]}
-RANDOM_SUBPIXEL=${SUBPIXEL_OPTIONS[$RANDOM % ${#SUBPIXEL_OPTIONS[@]}]}
+# HINTING_OPTIONS=("true" "false")
+# ANTIALIAS_OPTIONS=("true" "false")
+# SUBPIXEL_OPTIONS=("rgb" "bgr" "vrgb" "vbgr" "none")
+# RANDOM_HINTING=${HINTING_OPTIONS[$RANDOM % ${#HINTING_OPTIONS[@]}]}
+# RANDOM_ANTIALIAS=${ANTIALIAS_OPTIONS[$RANDOM % ${#ANTIALIAS_OPTIONS[@]}]}
+# RANDOM_SUBPIXEL=${SUBPIXEL_OPTIONS[$RANDOM % ${#SUBPIXEL_OPTIONS[@]}]}
 
-cat > ~/.config/fontconfig/render.conf <<EOF
-<?xml version='1.0'?>
-<!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
-<fontconfig>
-  <match target="font">
-    <edit name="hinting" mode="assign"><bool>$RANDOM_HINTING</bool></edit>
-    <edit name="antialias" mode="assign"><bool>$RANDOM_ANTIALIAS</bool></edit>
-    <edit name="rgba" mode="assign"><const>$RANDOM_SUBPIXEL</const></edit>
-    <edit name="ascent" mode="assign"><double>$(shuf -i 750-850 -n1)</double></edit>
-    <edit name="descent" mode="assign"><double>$(shuf -i 150-250 -n1)</double></edit>
-    <edit name="leading" mode="assign"><double>$(shuf -i 50-120 -n1)</double></edit>
-  </match>
-</fontconfig>
-EOF
-fc-cache -fv >/dev/null
-echo "[ClientRects] hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
+# cat > ~/.config/fontconfig/render.conf <<EOF
+# <?xml version='1.0'?>
+# <!DOCTYPE fontconfig SYSTEM 'fonts.dtd'>
+# <fontconfig>
+#   <match target="font">
+#     <edit name="hinting" mode="assign"><bool>$RANDOM_HINTING</bool></edit>
+#     <edit name="antialias" mode="assign"><bool>$RANDOM_ANTIALIAS</bool></edit>
+#     <edit name="rgba" mode="assign"><const>$RANDOM_SUBPIXEL</const></edit>
+#     <edit name="ascent" mode="assign"><double>$(shuf -i 750-850 -n1)</double></edit>
+#     <edit name="descent" mode="assign"><double>$(shuf -i 150-250 -n1)</double></edit>
+#     <edit name="leading" mode="assign"><double>$(shuf -i 50-120 -n1)</double></edit>
+#   </match>
+# </fontconfig>
+# EOF
+# fc-cache -fv >/dev/null
+# echo "[ClientRects] hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
 
-# =============================
-# Summary
-# =============================
-echo "-----------------------------------"
-echo "TÓM TẮT:"
-# echo "WebGL: Vendor=$RANDOM_VENDOR, Device=$RANDOM_DEVICE, VRAM=$RANDOM_VRAM"
-echo "Canvas: DPI=$RANDOM_DPI, Font=$RANDOM_FONT"
-echo "Audio: Driver=$TARGET_AUDIO, DSP=$DSP_PLUGIN, Level=$FILTER_LEVEL"
-echo "ClientRects: hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
-echo "Hãy reboot VM để các thay đổi áp dụng hoàn toàn."
+# # =============================
+# # Summary
+# # =============================
+# echo "-----------------------------------"
+# echo "TÓM TẮT:"
+# # echo "WebGL: Vendor=$RANDOM_VENDOR, Device=$RANDOM_DEVICE, VRAM=$RANDOM_VRAM"
+# echo "Canvas: DPI=$RANDOM_DPI, Font=$RANDOM_FONT"
+# echo "Audio: Driver=$TARGET_AUDIO, DSP=$DSP_PLUGIN, Level=$FILTER_LEVEL"
+# echo "ClientRects: hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
+# echo "Hãy reboot VM để các thay đổi áp dụng hoàn toàn."
