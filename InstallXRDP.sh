@@ -48,6 +48,9 @@ sudo systemctl restart xrdp && systemctl status xrdp --no-pager -l
 
 
 
+socks5://217.177.34.19:6012:eyvizq4mf8n3:6jo0C8dNSfrtkclt
+
+
 
 
 systemctl status xrdp --no-pager -l
