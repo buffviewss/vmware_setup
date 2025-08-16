@@ -1,20 +1,54 @@
-# Cài đủ gói cần thiết
+lsmod | egrep 'hv_(vmbus|netvsc|storvsc|sock)' || echo "hv modules not loaded"
+uname -r
+
+
+
+
+sudo systemctl stop xrdp || true
+sudo apt purge -y xrdp xorgxrdp
+sudo rm -rf /etc/xrdp /var/run/xrdp
 sudo apt update
 sudo apt install -y xrdp xorgxrdp gvfs-fuse
 
-# (QUAN TRỌNG) Cho user 'xrdp' vào group ssl-cert để đọc key TLS
+
+
+
+# Cho user 'xrdp' đọc private key TLS
 sudo adduser xrdp ssl-cert
 
-# Bật kênh Hyper-V socket (vsock)
+# Bật VSock để Hyper-V Enhanced Session dùng kênh nội bộ (không qua TCP)
 sudo sed -i 's/^port=.*/port=-1/' /etc/xrdp/xrdp.ini
 sudo sed -i 's/^#\?use_vsock=.*/use_vsock=true/' /etc/xrdp/xrdp.ini
 
-# Nạp module hv_sock và tự nạp sau reboot
+# Nạp và tự nạp module hv_sock
 echo hv_sock | sudo tee /etc/modules-load.d/hv_sock.conf
 sudo modprobe hv_sock
 
-# Khởi động dịch vụ và đặt auto-start
-sudo systemctl enable --now xrdp
 
-# Kiểm tra trạng thái (phải thấy active (running))
+
+
+sudo systemctl enable --now xrdp
 systemctl status xrdp --no-pager -l
+
+
+
+
+journalctl -xeu xrdp --no-pager
+
+
+
+Enhanced Session Mode
+
+
+
+sudo sed -i 's/^use_vsock=.*/use_vsock=false/' /etc/xrdp/xrdp.ini
+sudo sed -i 's/^port=.*/port=3389/' /etc/xrdp/xrdp.ini
+sudo systemctl restart xrdp && systemctl status xrdp --no-pager -l
+
+
+
+
+
+
+systemctl status xrdp --no-pager -l
+journalctl -xeu xrdp --no-pager | tail -n 100
