@@ -36,3 +36,28 @@ socks5://217.177.34.19:6012:eyvizq4mf8n3:6jo0C8dNSfrtkclt
 thieuz1.routermmo.xyz:5001:odo:25251325
 
 socks5://46.151.225.105:54512:vzYOhB2bQjesGkR:okx7K67Bf6D0uyn
+
+
+
+
+su
+# Chỉ cho phép UDP qua VPN (tun0)
+iptables -I OUTPUT -o tun0 -p udp -j ACCEPT
+
+# Chặn tất cả các kết nối UDP ra ngoài (qua Wi-Fi LAN, v.v.)
+iptables -I OUTPUT -p udp -j DROP
+
+
+
+
+
+# Chặn DNS trực tiếp (UDP/53) không qua VPN
+iptables -I OUTPUT -p udp --dport 53 -j DROP
+
+
+
+https://dns.google/dns-query
+
+https://cloudflare-dns.com/dns-query
+
+
