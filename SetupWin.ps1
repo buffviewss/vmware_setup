@@ -26,6 +26,7 @@ $DownloadPathNekoBox = "$env:USERPROFILE\Downloads\nekobox_installer.zip"
 $InstallPath = "$env:ProgramFiles\Nekobox"
 
 
+
 # Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
     $pythonPath = Get-Command python -ErrorAction SilentlyContinue
@@ -42,6 +43,13 @@ function Install-PythonAndGdown {
             Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath -ErrorAction Stop
             Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
             Write-Host "Cài đặt Python xong."
+
+            # Kiểm tra lại Python
+            $pythonPath = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $pythonPath) {
+                Write-Host "Lỗi: Python không thể cài đặt hoặc không có sẵn trong PATH."
+                exit
+            }
         } catch {
             Write-Host "Lỗi khi tải hoặc cài đặt Python: $_"
             exit
@@ -49,6 +57,8 @@ function Install-PythonAndGdown {
     } else {
         Write-Host "Python đã được cài đặt."
     }
+
+
 
     # Cài đặt gdown
     Write-Host "Đang cài đặt gdown..."
@@ -358,4 +368,5 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
