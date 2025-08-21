@@ -27,7 +27,6 @@ $InstallPath = "$env:ProgramFiles\Nekobox"
 
 
 # Kiểm tra và cài đặt Python và gdown
-# Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
     # Kiểm tra xem Python đã được cài đặt chưa
     $pythonPath = Get-Command python -ErrorAction SilentlyContinue
@@ -37,7 +36,7 @@ function Install-PythonAndGdown {
 
         try {
             # Cài đặt Python bằng winget
-            Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9" -Wait -PassThru
+            Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9" -Wait -PassThru -Verb RunAs
 
             Write-Host "Cài đặt Python xong."
 
@@ -374,6 +373,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
