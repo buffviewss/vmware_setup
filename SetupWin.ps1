@@ -1,25 +1,4 @@
-# # --- Kiểm tra và cài đặt PowerShell 7 (nếu cần) ---
 
-# # Kiểm tra phiên bản PowerShell hiện tại
-# $CurrentVersion = $PSVersionTable.PSVersion.Major
-
-# # Nếu phiên bản PowerShell hiện tại nhỏ hơn 7, tiến hành cài đặt PowerShell 7
-# if ($CurrentVersion -lt 7) {
-#     Write-Host "Phiên bản PowerShell hiện tại là $CurrentVersion. Đang nâng cấp lên PowerShell 7..."
-    
-#     # Kiểm tra xem winget có sẵn không
-#     if (Get-Command winget -ErrorAction SilentlyContinue) {
-#         Write-Host "Đang cài đặt PowerShell 7 qua winget..."
-#         # Cài đặt PowerShell 7
-#         winget install --id Microsoft.Powershell --source winget
-#         Write-Host "PowerShell đã được nâng cấp thành công."
-#     } else {
-#         Write-Host "winget không có sẵn trên hệ thống của bạn. Hãy cài đặt PowerShell 7 thủ công từ GitHub."
-#         exit
-#     }
-# } else {
-#     Write-Host "Phiên bản PowerShell hiện tại là $CurrentVersion. Không cần nâng cấp."
-# }
 # --- Cấu hình đầu script ---
 
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
@@ -82,29 +61,6 @@ function Set-RegionSettings {
     # Thay đổi đầu vào bàn phím (nếu cần)
     Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # US Keyboard
 }
-
-# # # Hàm để thay đổi ngôn ngữ hệ thống, múi giờ và thông tin quốc gia
-# # function Set-RegionSettings {
-# #     param([string]$Region)
-
-# #     # Thay đổi ngôn ngữ hệ thống
-# #     $Lang = switch($Region) {
-# #         "UK" {"en-GB"}
-# #         "US" {"en-US"}
-# #         "AU" {"en-AU"}
-# #         "SINGAPORE" {"en-SG"}
-# #         "NEWZELAND" {"en-NZ"}
-# #         default {"en-US"}
-# #     }
-
-# #     Set-WinUILanguageOverride -Language $Lang
-# #     Set-WinUserLanguageList $Lang -Force
-# #     Set-TimeZone -Id "UTC"
-
-#     # Thay đổi vùng
-#     Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # 0409:US Keyboard
-#     Set-RegionalFormat -Locale $Lang
-# }
 
 # Gỡ cài đặt Chrome nếu đã cài đặt
 function Uninstall-Chrome {
@@ -277,6 +233,7 @@ Set-AutoStart
 Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
+
 
 
 
