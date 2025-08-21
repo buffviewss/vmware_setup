@@ -104,7 +104,7 @@ function Set-RegionSettings {
 #     # Thay đổi vùng
 #     Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # 0409:US Keyboard
 #     Set-RegionalFormat -Locale $Lang
-}
+# }
 
 # Gỡ cài đặt Chrome nếu đã cài đặt
 function Uninstall-Chrome {
@@ -277,5 +277,6 @@ Set-AutoStart
 Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
+
 
 
