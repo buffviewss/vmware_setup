@@ -7,11 +7,11 @@ Start-Transcript -Path $logFile
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
 # Bạn sẽ cần nhập ID của các tệp thủ công từ Google Drive
 $ChromeVersions = @{
-    1 = @{ Name = "google-chrome-135-0-7049-96"  ; ID = "1oSfjrZvx7LUoF6YHGiImcN1sI5ka1RGJ" }
-    2 = @{ Name = "google-chrome-136-0-7103-114"  ; ID = "1z850sfY0i720Oa3jf6A3E1KKcAAiMNFR" }
-    3 = @{ Name = "google-chrome-137-0-7151-120"  ; ID = "1FgkcBwoGr5C-55ZX433IEz9mH7UbGTlr" }
-    4 = @{ Name = "google-chrome-138-0-7194-0"  ; ID = "1QEMHQSJk3A_KcK2t_yuYXcVjHVAPHQay" }
-    5 = @{ Name = "google-chrome-141-0-7340-0"  ; ID = "1El9yy2-AMu3ZUZoGK8KoYujXPt8WQ9Ko" }
+    1 = @{ Name = "google-chrome-135-0-7049-96"  ; ID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H" }
+    2 = @{ Name = "google-chrome-136-0-7103-114"  ; ID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc" }
+    3 = @{ Name = "google-chrome-137-0-7151-120"  ; ID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6" }
+    4 = @{ Name = "google-chrome-138-0-7194-0"  ; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
+    5 = @{ Name = "google-chrome-141-0-7340-0"  ; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
 }
 
 # ID của tệp Nekobox trên Google Drive (cập nhật bằng ID thực tế)
@@ -278,5 +278,6 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
