@@ -27,24 +27,17 @@ $InstallPath = "$env:ProgramFiles\Nekobox"
 
 
 # Kiểm tra và cài đặt Python và gdown
+# Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
     # Kiểm tra xem Python đã được cài đặt chưa
     $pythonPath = Get-Command python -ErrorAction SilentlyContinue
 
     if (-not $pythonPath) {
-        Write-Host "Python chưa được cài đặt. Đang tải và cài đặt Python..."
-
-        # Tải Python (Chọn bản 64-bit)
-        $pythonInstallerUrl = "https://www.python.org/ftp/python/3.9.7/python-3.9.7-amd64.exe"
-        $pythonInstallerPath = "$env:USERPROFILE\Downloads\python_installer.exe"
+        Write-Host "Python chưa được cài đặt. Đang cài đặt Python bằng winget..."
 
         try {
-            # Tải Python
-            Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath -ErrorAction Stop
-            Write-Host "Tải Python thành công, bắt đầu cài đặt..."
-
-            # Cài đặt Python với quyền quản trị
-            Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait -PassThru -Verb RunAs
+            # Cài đặt Python bằng winget
+            Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9" -Wait -PassThru
 
             Write-Host "Cài đặt Python xong."
 
@@ -57,7 +50,7 @@ function Install-PythonAndGdown {
                 Write-Host "Python đã được cài đặt thành công."
             }
         } catch {
-            Write-Host "Lỗi khi tải hoặc cài đặt Python: $_"
+            Write-Host "Lỗi khi cài đặt Python: $_"
             exit
         }
     } else {
@@ -381,6 +374,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
