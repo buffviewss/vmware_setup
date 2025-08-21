@@ -2,6 +2,7 @@
 $logFile = "$env:USERPROFILE\Downloads\script_log.txt"
 $ErrorActionPreference = "Stop"  # Dừng script ngay khi gặp lỗi
 Start-Transcript -Path $logFile
+
 # --- Cấu hình đầu script ---
 
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
@@ -10,8 +11,8 @@ $ChromeVersions = @{
     1 = @{ Name = "google-chrome-135-0-7049-96"  ; ID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H" }
     2 = @{ Name = "google-chrome-136-0-7103-114"  ; ID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc" }
     3 = @{ Name = "google-chrome-137-0-7151-120"  ; ID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6" }
-    4 = @{ Name = "google-chrome-138-0-7194-0"  ; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
-    5 = @{ Name = "google-chrome-141-0-7340-0"  ; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
+    4 = @{ Name = "google-chrome-138-0-7194-0"    ; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
+    5 = @{ Name = "google-chrome-141-0-7340-0"    ; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
 }
 
 # ID của tệp Nekobox trên Google Drive (cập nhật bằng ID thực tế)
@@ -75,8 +76,6 @@ function Download-With-Gdown {
         exit
     }
 }
-
-
 
 # --- Cấu hình kết thúc ---
 
@@ -149,8 +148,6 @@ function Uninstall-Chrome {
 }
 
 # Tải tệp Chrome từ Google Drive
-
-# Tải tệp Chrome từ Google Drive
 function Download-Chrome {
     param([string]$FileID)
 
@@ -167,7 +164,6 @@ function Download-Chrome {
         exit
     }
 }
-
 
 # Cài đặt Chrome
 function Install-Chrome {
@@ -203,7 +199,6 @@ function Disable-AutoUpdateChrome {
     }
 }
 
-
 # Tải tệp Nekobox từ Google Drive
 function Download-Nekobox {
     param([string]$FileID)
@@ -221,7 +216,6 @@ function Download-Nekobox {
         exit
     }
 }
-
 
 # Giải nén tệp Nekobox
 function Extract-Nekobox {
@@ -299,6 +293,37 @@ function Pin-To-Taskbar {
     }
 }
 
+# Hàm chọn phiên bản Chrome từ danh sách
+function Select-ChromeVersion {
+    Write-Host "Các phiên bản Google Chrome có sẵn:"
+
+    # Hiển thị các phiên bản và yêu cầu người dùng chọn
+    $ChromeVersions.GetEnumerator() | ForEach-Object { 
+        Write-Host "$($_.Key): $($_.Value.Name)"
+    }
+
+    $selectedVersion = Read-Host "Nhập số thứ tự phiên bản bạn muốn tải và cài đặt (1 - 5)"
+    
+    if ($ChromeVersions.ContainsKey($selectedVersion)) {
+        $version = $ChromeVersions[$selectedVersion]
+        Write-Host "Bạn đã chọn phiên bản: $($version.Name)"
+        return $version.ID
+    } else {
+        Write-Host "Lựa chọn không hợp lệ. Vui lòng thử lại."
+        exit
+    }
+}
+
+# Tải và cài đặt Chrome theo phiên bản người dùng chọn
+function Download-And-Install-Chrome {
+    $chromeFileID = Select-ChromeVersion
+
+    # Tải tệp Chrome từ Google Drive
+    Download-Chrome -FileID $chromeFileID
+    Uninstall-Chrome
+    Install-Chrome
+}
+
 # Kiểm tra quyền quản trị
 Check-AdminRights
 
@@ -306,9 +331,7 @@ Check-AdminRights
 Set-RegionSettings -Region "US"
 
 # Tải và cài đặt Chrome
-Download-Chrome -FileID "FILE_ID_FOR_CHROME"
-Uninstall-Chrome
-Install-Chrome
+Download-And-Install-Chrome
 
 # Khóa cập nhật tự động của Chrome
 Disable-AutoUpdateChrome
@@ -327,9 +350,3 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
-
-
-
-
-
-
