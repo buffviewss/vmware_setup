@@ -56,16 +56,27 @@ function Install-PythonAndGdown {
         Write-Host "Python đã được cài đặt."
     }
 
+    # Kiểm tra và cài đặt pip
+    Write-Host "Đang kiểm tra pip..."
+    try {
+        python -m ensurepip --upgrade
+        Write-Host "pip đã được cài đặt thành công."
+    } catch {
+        Write-Host "Lỗi khi cài đặt pip: $_"
+        exit
+    }
+
     # Cài đặt gdown
     Write-Host "Đang cài đặt gdown..."
     try {
-        python -m pip install gdown
+        python -m pip install gdown --quiet
         Write-Host "Cài đặt gdown xong."
     } catch {
         Write-Host "Lỗi khi cài đặt gdown: $_"
         exit
     }
 }
+
 
 
 
@@ -373,6 +384,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
