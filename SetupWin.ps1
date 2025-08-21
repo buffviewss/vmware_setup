@@ -1,4 +1,25 @@
+# --- Kiểm tra và cài đặt PowerShell 7 (nếu cần) ---
 
+# Kiểm tra phiên bản PowerShell hiện tại
+$CurrentVersion = $PSVersionTable.PSVersion.Major
+
+# Nếu phiên bản PowerShell hiện tại nhỏ hơn 7, tiến hành cài đặt PowerShell 7
+if ($CurrentVersion -lt 7) {
+    Write-Host "Phiên bản PowerShell hiện tại là $CurrentVersion. Đang nâng cấp lên PowerShell 7..."
+    
+    # Kiểm tra xem winget có sẵn không
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Đang cài đặt PowerShell 7 qua winget..."
+        # Cài đặt PowerShell 7
+        winget install --id Microsoft.Powershell --source winget
+        Write-Host "PowerShell đã được nâng cấp thành công."
+    } else {
+        Write-Host "winget không có sẵn trên hệ thống của bạn. Hãy cài đặt PowerShell 7 thủ công từ GitHub."
+        exit
+    }
+} else {
+    Write-Host "Phiên bản PowerShell hiện tại là $CurrentVersion. Không cần nâng cấp."
+}
 # --- Cấu hình đầu script ---
 
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
@@ -232,3 +253,4 @@ Set-AutoStart
 Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
+
