@@ -4,6 +4,41 @@ $ErrorActionPreference = "Stop"  # Dừng script ngay khi gặp lỗi
 Start-Transcript -Path $logFile
 # --- Cấu hình đầu script ---
 
+# Kiểm tra và cài đặt Python và gdown
+function Install-PythonAndGdown {
+    $pythonPath = Get-Command python -ErrorAction SilentlyContinue
+
+    if (-not $pythonPath) {
+        Write-Host "Python chưa được cài đặt. Đang tải và cài đặt Python..."
+
+        # Tải Python (Chọn bản 64-bit)
+        $pythonInstallerUrl = "https://www.python.org/ftp/python/3.9.7/python-3.9.7-amd64.exe"
+        $pythonInstallerPath = "$env:USERPROFILE\Downloads\python_installer.exe"
+
+        try {
+            # Tải Python
+            Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath -ErrorAction Stop
+            Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
+            Write-Host "Cài đặt Python xong."
+        } catch {
+            Write-Host "Lỗi khi tải hoặc cài đặt Python: $_"
+            exit
+        }
+    } else {
+        Write-Host "Python đã được cài đặt."
+    }
+
+    # Cài đặt gdown
+    Write-Host "Đang cài đặt gdown..."
+    try {
+        python -m pip install gdown --quiet
+        Write-Host "Cài đặt gdown xong."
+    } catch {
+        Write-Host "Lỗi khi cài đặt gdown: $_"
+        exit
+    }
+}
+
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
 # Bạn sẽ cần nhập ID của các tệp thủ công từ Google Drive
 $ChromeVersions = @{
@@ -95,19 +130,16 @@ function Uninstall-Chrome {
 }
 
 # Tải tệp Chrome từ Google Drive
+
+# Tải tệp Chrome từ Google Drive
 function Download-Chrome {
     param([string]$FileID)
 
-    $DownloadUrl = "https://drive.google.com/uc?id=$FileID&export=download"
-    Write-Host "Đang tải Chrome từ Google Drive: $DownloadUrl"
+    $DownloadPathChrome = "$env:USERPROFILE\Downloads\chrome_installer.exe"
+    Write-Host "Đang tải Chrome từ Google Drive: $DownloadPathChrome"
 
-    try {
-        Invoke-WebRequest -Uri $DownloadUrl -OutFile $DownloadPathChrome -ErrorAction Stop
-    } catch {
-        Write-Host "Lỗi: Không thể tải tệp Chrome từ Google Drive. Kiểm tra lại link Google Drive."
-        Write-Host "Thông tin lỗi: $_"
-        exit
-    }
+    # Sử dụng gdown để tải file
+    Download-With-Gdown -FileID $FileID -OutputPath $DownloadPathChrome
 
     if (Test-Path $DownloadPathChrome) {
         Write-Host "Đã tải xong tệp cài đặt Chrome."
@@ -116,6 +148,7 @@ function Download-Chrome {
         exit
     }
 }
+
 
 # Cài đặt Chrome
 function Install-Chrome {
@@ -151,20 +184,16 @@ function Disable-AutoUpdateChrome {
     }
 }
 
+
 # Tải tệp Nekobox từ Google Drive
 function Download-Nekobox {
     param([string]$FileID)
 
-    $DownloadUrl = "https://drive.google.com/uc?id=$FileID&export=download"
-    Write-Host "Đang tải Nekobox từ Google Drive: $DownloadUrl"
+    $DownloadPathNekoBox = "$env:USERPROFILE\Downloads\nekobox_installer.zip"
+    Write-Host "Đang tải Nekobox từ Google Drive: $DownloadPathNekoBox"
 
-    try {
-        Invoke-WebRequest -Uri $DownloadUrl -OutFile $DownloadPathNekoBox -ErrorAction Stop
-    } catch {
-        Write-Host "Lỗi: Không thể tải tệp Nekobox từ Google Drive. Kiểm tra lại link Google Drive."
-        Write-Host "Thông tin lỗi: $_"
-        exit
-    }
+    # Sử dụng gdown để tải file
+    Download-With-Gdown -FileID $FileID -OutputPath $DownloadPathNekoBox
 
     if (Test-Path $DownloadPathNekoBox) {
         Write-Host "Đã tải xong tệp cài đặt Nekobox."
@@ -173,6 +202,7 @@ function Download-Nekobox {
         exit
     }
 }
+
 
 # Giải nén tệp Nekobox
 function Extract-Nekobox {
@@ -278,6 +308,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
