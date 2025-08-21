@@ -58,8 +58,7 @@ function Check-AdminRights {
         exit
     }
 }
-
-# Hàm để thay đổi ngôn ngữ hệ thống, múi giờ và thông tin quốc gia
+# Thay đổi ngôn ngữ hệ thống, múi giờ và thông tin quốc gia
 function Set-RegionSettings {
     param([string]$Region)
 
@@ -73,13 +72,38 @@ function Set-RegionSettings {
         default {"en-US"}
     }
 
+    # Thay đổi ngôn ngữ hệ thống và vùng
     Set-WinUILanguageOverride -Language $Lang
     Set-WinUserLanguageList $Lang -Force
+
+    # Thay đổi múi giờ
     Set-TimeZone -Id "UTC"
 
-    # Thay đổi vùng
-    Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # 0409:US Keyboard
-    Set-RegionalFormat -Locale $Lang
+    # Thay đổi đầu vào bàn phím (nếu cần)
+    Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # US Keyboard
+}
+
+# # # Hàm để thay đổi ngôn ngữ hệ thống, múi giờ và thông tin quốc gia
+# # function Set-RegionSettings {
+# #     param([string]$Region)
+
+# #     # Thay đổi ngôn ngữ hệ thống
+# #     $Lang = switch($Region) {
+# #         "UK" {"en-GB"}
+# #         "US" {"en-US"}
+# #         "AU" {"en-AU"}
+# #         "SINGAPORE" {"en-SG"}
+# #         "NEWZELAND" {"en-NZ"}
+# #         default {"en-US"}
+# #     }
+
+# #     Set-WinUILanguageOverride -Language $Lang
+# #     Set-WinUserLanguageList $Lang -Force
+# #     Set-TimeZone -Id "UTC"
+
+#     # Thay đổi vùng
+#     Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # 0409:US Keyboard
+#     Set-RegionalFormat -Locale $Lang
 }
 
 # Gỡ cài đặt Chrome nếu đã cài đặt
@@ -253,4 +277,5 @@ Set-AutoStart
 Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
+
 
