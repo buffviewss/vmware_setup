@@ -59,7 +59,7 @@ function Install-PythonAndGdown {
     # Cài đặt gdown
     Write-Host "Đang cài đặt gdown..."
     try {
-        python -m pip install gdown --quiet
+        python -m pip install gdown
         Write-Host "Cài đặt gdown xong."
     } catch {
         Write-Host "Lỗi khi cài đặt gdown: $_"
@@ -373,6 +373,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
