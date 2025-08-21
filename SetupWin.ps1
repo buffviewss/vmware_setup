@@ -27,8 +27,11 @@ $InstallPath = "$env:ProgramFiles\Nekobox"
 
 
 
+
+
 # Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
+    # Kiểm tra xem Python đã được cài đặt chưa
     $pythonPath = Get-Command python -ErrorAction SilentlyContinue
 
     if (-not $pythonPath) {
@@ -41,14 +44,20 @@ function Install-PythonAndGdown {
         try {
             # Tải Python
             Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath -ErrorAction Stop
-            Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
+            Write-Host "Tải Python thành công, bắt đầu cài đặt..."
+
+            # Cài đặt Python với quyền quản trị
+            Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait -PassThru
+
             Write-Host "Cài đặt Python xong."
 
-            # Kiểm tra lại Python
+            # Kiểm tra lại Python sau khi cài đặt
             $pythonPath = Get-Command python -ErrorAction SilentlyContinue
             if (-not $pythonPath) {
                 Write-Host "Lỗi: Python không thể cài đặt hoặc không có sẵn trong PATH."
                 exit
+            } else {
+                Write-Host "Python đã được cài đặt thành công."
             }
         } catch {
             Write-Host "Lỗi khi tải hoặc cài đặt Python: $_"
@@ -57,8 +66,6 @@ function Install-PythonAndGdown {
     } else {
         Write-Host "Python đã được cài đặt."
     }
-
-
 
     # Cài đặt gdown
     Write-Host "Đang cài đặt gdown..."
@@ -70,7 +77,6 @@ function Install-PythonAndGdown {
         exit
     }
 }
-
 
 # Hàm tải tệp bằng gdown
 function Download-With-Gdown {
@@ -86,6 +92,12 @@ function Download-With-Gdown {
         exit
     }
 }
+
+
+
+
+
+
 
 # --- Cấu hình kết thúc ---
 
@@ -368,5 +380,6 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
