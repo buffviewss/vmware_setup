@@ -3,6 +3,10 @@ $logFile = "$env:USERPROFILE\Downloads\script_log.txt"
 $ErrorActionPreference = "Stop"  # Dừng script ngay khi gặp lỗi
 Start-Transcript -Path $logFile
 
+
+Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9" -Wait -PassThru -Verb RunAs
+ python -m pip install gdown --quiet
+ 
 # --- Cấu hình đầu script ---
 
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
@@ -384,6 +388,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
