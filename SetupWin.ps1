@@ -302,17 +302,25 @@ function Select-ChromeVersion {
         Write-Host "$($_.Key): $($_.Value.Name)"
     }
 
-    $selectedVersion = Read-Host "Nhập số thứ tự phiên bản bạn muốn tải và cài đặt (1 - 5)"
-    
-    if ($ChromeVersions.ContainsKey($selectedVersion)) {
-        $version = $ChromeVersions[$selectedVersion]
-        Write-Host "Bạn đã chọn phiên bản: $($version.Name)"
-        return $version.ID
-    } else {
-        Write-Host "Lựa chọn không hợp lệ. Vui lòng thử lại."
-        exit
+    $validChoice = $false
+    while (-not $validChoice) {
+        $selectedVersion = Read-Host "Nhập số thứ tự phiên bản bạn muốn tải và cài đặt (1 - 5)"
+        
+        # Loại bỏ khoảng trắng và chuyển thành số nguyên nếu có thể
+        $selectedVersion = $selectedVersion.Trim()
+
+        # Kiểm tra xem giá trị nhập vào có hợp lệ không
+        if ($selectedVersion -match '^\d+$' -and $ChromeVersions.ContainsKey([int]$selectedVersion)) {
+            $validChoice = $true
+            $version = $ChromeVersions[[int]$selectedVersion]
+            Write-Host "Bạn đã chọn phiên bản: $($version.Name)"
+            return $version.ID
+        } else {
+            Write-Host "Lựa chọn không hợp lệ. Vui lòng nhập lại một số từ 1 đến 5."
+        }
     }
 }
+
 
 # Tải và cài đặt Chrome theo phiên bản người dùng chọn
 function Download-And-Install-Chrome {
@@ -350,3 +358,4 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
