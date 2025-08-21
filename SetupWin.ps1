@@ -4,6 +4,27 @@ $ErrorActionPreference = "Stop"  # Dừng script ngay khi gặp lỗi
 Start-Transcript -Path $logFile
 # --- Cấu hình đầu script ---
 
+# Danh sách các phiên bản Chrome và ID tệp Google Drive
+# Bạn sẽ cần nhập ID của các tệp thủ công từ Google Drive
+$ChromeVersions = @{
+    1 = @{ Name = "google-chrome-135-0-7049-96"  ; ID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H" }
+    2 = @{ Name = "google-chrome-136-0-7103-114"  ; ID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc" }
+    3 = @{ Name = "google-chrome-137-0-7151-120"  ; ID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6" }
+    4 = @{ Name = "google-chrome-138-0-7194-0"  ; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
+    5 = @{ Name = "google-chrome-141-0-7340-0"  ; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
+}
+
+# ID của tệp Nekobox trên Google Drive (cập nhật bằng ID thực tế)
+$NekoBoxFileID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"  # Thay thế ID của tệp Nekobox trong Google Drive
+
+# Đường dẫn tải xuống tệp cài đặt Chrome và Nekobox
+$DownloadPathChrome = "$env:USERPROFILE\Downloads\chrome_installer.exe"
+$DownloadPathNekoBox = "$env:USERPROFILE\Downloads\nekobox_installer.zip"
+
+# Đường dẫn cài đặt Nekobox
+$InstallPath = "$env:ProgramFiles\Nekobox"
+
+
 # Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
     $pythonPath = Get-Command python -ErrorAction SilentlyContinue
@@ -56,25 +77,6 @@ function Download-With-Gdown {
 }
 
 
-# Danh sách các phiên bản Chrome và ID tệp Google Drive
-# Bạn sẽ cần nhập ID của các tệp thủ công từ Google Drive
-$ChromeVersions = @{
-    1 = @{ Name = "google-chrome-135-0-7049-96"  ; ID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H" }
-    2 = @{ Name = "google-chrome-136-0-7103-114"  ; ID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc" }
-    3 = @{ Name = "google-chrome-137-0-7151-120"  ; ID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6" }
-    4 = @{ Name = "google-chrome-138-0-7194-0"  ; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
-    5 = @{ Name = "google-chrome-141-0-7340-0"  ; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
-}
-
-# ID của tệp Nekobox trên Google Drive (cập nhật bằng ID thực tế)
-$NekoBoxFileID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"  # Thay thế ID của tệp Nekobox trong Google Drive
-
-# Đường dẫn tải xuống tệp cài đặt Chrome và Nekobox
-$DownloadPathChrome = "$env:USERPROFILE\Downloads\chrome_installer.exe"
-$DownloadPathNekoBox = "$env:USERPROFILE\Downloads\nekobox_installer.zip"
-
-# Đường dẫn cài đặt Nekobox
-$InstallPath = "$env:ProgramFiles\Nekobox"
 
 # --- Cấu hình kết thúc ---
 
@@ -325,6 +327,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
