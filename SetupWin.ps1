@@ -39,6 +39,23 @@ function Install-PythonAndGdown {
     }
 }
 
+
+# Hàm tải tệp bằng gdown
+function Download-With-Gdown {
+    param([string]$FileID, [string]$OutputPath)
+
+    # Chạy Python với lệnh gdown từ PowerShell
+    $pythonCmd = "python -m gdown https://drive.google.com/uc?id=$FileID -O $OutputPath"
+    try {
+        Write-Host "Đang tải tệp từ Google Drive bằng gdown..."
+        Invoke-Expression $pythonCmd
+    } catch {
+        Write-Host "Lỗi khi tải tệp bằng gdown: $_"
+        exit
+    }
+}
+
+
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
 # Bạn sẽ cần nhập ID của các tệp thủ công từ Google Drive
 $ChromeVersions = @{
@@ -308,6 +325,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
