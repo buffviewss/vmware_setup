@@ -1,4 +1,3 @@
-
 # --- Cấu hình đầu script ---
 
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
@@ -37,46 +36,57 @@ function Check-AdminRights {
         exit
     }
 }
+
 # Thay đổi ngôn ngữ hệ thống, múi giờ và thông tin quốc gia
 function Set-RegionSettings {
     param([string]$Region)
 
-    # Thay đổi ngôn ngữ hệ thống
-    $Lang = switch($Region) {
-        "UK" {"en-GB"}
-        "US" {"en-US"}
-        "AU" {"en-AU"}
-        "SINGAPORE" {"en-SG"}
-        "NEWZELAND" {"en-NZ"}
-        default {"en-US"}
+    try {
+        # Thay đổi ngôn ngữ hệ thống
+        $Lang = switch($Region) {
+            "UK" {"en-GB"}
+            "US" {"en-US"}
+            "AU" {"en-AU"}
+            "SINGAPORE" {"en-SG"}
+            "NEWZELAND" {"en-NZ"}
+            default {"en-US"}
+        }
+
+        # Thay đổi ngôn ngữ hệ thống và vùng
+        Set-WinUILanguageOverride -Language $Lang
+        Set-WinUserLanguageList $Lang -Force
+
+        # Thay đổi múi giờ
+        Set-TimeZone -Id "UTC"
+
+        # Thay đổi đầu vào bàn phím (nếu cần)
+        Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # US Keyboard
+    } catch {
+        Write-Host "Lỗi: Không thể thay đổi cài đặt khu vực. Chi tiết lỗi: $_"
+        exit
     }
-
-    # Thay đổi ngôn ngữ hệ thống và vùng
-    Set-WinUILanguageOverride -Language $Lang
-    Set-WinUserLanguageList $Lang -Force
-
-    # Thay đổi múi giờ
-    Set-TimeZone -Id "UTC"
-
-    # Thay đổi đầu vào bàn phím (nếu cần)
-    Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" # US Keyboard
 }
 
 # Gỡ cài đặt Chrome nếu đã cài đặt
 function Uninstall-Chrome {
     Write-Host "Đang kiểm tra và gỡ bỏ Google Chrome nếu có..."
-    $chromeUninstallKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-    $chromeAppKey = Get-ChildItem -Path $chromeUninstallKey | Where-Object { $_.GetValue("DisplayName") -like "Google Chrome*" }
+    try {
+        $chromeUninstallKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+        $chromeAppKey = Get-ChildItem -Path $chromeUninstallKey | Where-Object { $_.GetValue("DisplayName") -like "Google Chrome*" }
 
-    if ($chromeAppKey) {
-        Write-Host "Đang gỡ bỏ Google Chrome..."
-        $uninstallString = $chromeAppKey.GetValue("UninstallString")
-        
-        # Thực thi lệnh gỡ bỏ
-        Start-Process -FilePath $uninstallString -ArgumentList "/silent /uninstall" -Wait
-        Write-Host "Google Chrome đã được gỡ bỏ thành công."
-    } else {
-        Write-Host "Không tìm thấy Google Chrome cài đặt trên máy."
+        if ($chromeAppKey) {
+            Write-Host "Đang gỡ bỏ Google Chrome..."
+            $uninstallString = $chromeAppKey.GetValue("UninstallString")
+            
+            # Thực thi lệnh gỡ bỏ
+            Start-Process -FilePath $uninstallString -ArgumentList "/silent /uninstall" -Wait
+            Write-Host "Google Chrome đã được gỡ bỏ thành công."
+        } else {
+            Write-Host "Không tìm thấy Google Chrome cài đặt trên máy."
+        }
+    } catch {
+        Write-Host "Lỗi khi gỡ bỏ Google Chrome: $_"
+        exit
     }
 }
 
@@ -91,6 +101,7 @@ function Download-Chrome {
         Invoke-WebRequest -Uri $DownloadUrl -OutFile $DownloadPathChrome -ErrorAction Stop
     } catch {
         Write-Host "Lỗi: Không thể tải tệp Chrome từ Google Drive. Kiểm tra lại link Google Drive."
+        Write-Host "Thông tin lỗi: $_"
         exit
     }
 
@@ -105,26 +116,35 @@ function Download-Chrome {
 # Cài đặt Chrome
 function Install-Chrome {
     Write-Host "Đang cài đặt Chrome..."
-    Start-Process -FilePath $DownloadPathChrome -ArgumentList "/silent /install" -Wait
-    Write-Host "Cài đặt Chrome xong."
+    try {
+        Start-Process -FilePath $DownloadPathChrome -ArgumentList "/silent /install" -Wait
+        Write-Host "Cài đặt Chrome xong."
+    } catch {
+        Write-Host "Lỗi khi cài đặt Chrome: $_"
+        exit
+    }
 }
 
 # Khóa cập nhật tự động của Chrome
 function Disable-AutoUpdateChrome {
     Write-Host "Đang vô hiệu hóa cập nhật tự động của Chrome..."
+    try {
+        $chromeUpdateKey = "HKLM:\SOFTWARE\Policies\Google\Update"
+        
+        # Kiểm tra nếu không có khóa thì tạo mới
+        if (-not (Test-Path $chromeUpdateKey)) {
+            New-Item -Path $chromeUpdateKey -Force
+        }
 
-    $chromeUpdateKey = "HKLM:\SOFTWARE\Policies\Google\Update"
-    
-    # Kiểm tra nếu không có khóa thì tạo mới
-    if (-not (Test-Path $chromeUpdateKey)) {
-        New-Item -Path $chromeUpdateKey -Force
+        # Thiết lập khóa vô hiệu hóa cập nhật tự động
+        Set-ItemProperty -Path $chromeUpdateKey -Name "AutoUpdateCheckPeriodMinutes" -Value 0
+        Set-ItemProperty -Path $chromeUpdateKey -Name "DisableAutoUpdate" -Value 1
+
+        Write-Host "Cập nhật tự động của Chrome đã được vô hiệu hóa."
+    } catch {
+        Write-Host "Lỗi khi vô hiệu hóa cập nhật tự động: $_"
+        exit
     }
-
-    # Thiết lập khóa vô hiệu hóa cập nhật tự động
-    Set-ItemProperty -Path $chromeUpdateKey -Name "AutoUpdateCheckPeriodMinutes" -Value 0
-    Set-ItemProperty -Path $chromeUpdateKey -Name "DisableAutoUpdate" -Value 1
-
-    Write-Host "Cập nhật tự động của Chrome đã được vô hiệu hóa."
 }
 
 # Tải tệp Nekobox từ Google Drive
@@ -138,6 +158,7 @@ function Download-Nekobox {
         Invoke-WebRequest -Uri $DownloadUrl -OutFile $DownloadPathNekoBox -ErrorAction Stop
     } catch {
         Write-Host "Lỗi: Không thể tải tệp Nekobox từ Google Drive. Kiểm tra lại link Google Drive."
+        Write-Host "Thông tin lỗi: $_"
         exit
     }
 
@@ -156,55 +177,73 @@ function Extract-Nekobox {
     $extractPath = "$env:USERPROFILE\Downloads\nekobox"
     
     # Kiểm tra nếu thư mục giải nén đã tồn tại, nếu có thì xóa nó
-    if (Test-Path $extractPath) {
-        Remove-Item -Path $extractPath -Recurse -Force
+    try {
+        if (Test-Path $extractPath) {
+            Remove-Item -Path $extractPath -Recurse -Force
+        }
+
+        # Giải nén tệp
+        Expand-Archive -Path $DownloadPathNekoBox -DestinationPath $extractPath
+        Write-Host "Đã giải nén Nekobox vào thư mục: $extractPath"
+    } catch {
+        Write-Host "Lỗi khi giải nén Nekobox: $_"
+        exit
     }
-
-    # Giải nén tệp
-    Expand-Archive -Path $DownloadPathNekoBox -DestinationPath $extractPath
-
-    Write-Host "Đã giải nén Nekobox vào thư mục: $extractPath"
 }
 
 # Cài đặt Nekobox từ thư mục giải nén
 function Install-Nekobox {
     Write-Host "Đang cài đặt Nekobox từ thư mục giải nén..."
 
-    Start-Process -FilePath "$env:USERPROFILE\Downloads\nekobox\nekobox.exe" -ArgumentList "/silent /install /dir=$InstallPath" -Wait
-
-    Write-Host "Cài đặt Nekobox xong."
+    try {
+        Start-Process -FilePath "$env:USERPROFILE\Downloads\nekobox\nekobox.exe" -ArgumentList "/silent /install /dir=$InstallPath" -Wait
+        Write-Host "Cài đặt Nekobox xong."
+    } catch {
+        Write-Host "Lỗi khi cài đặt Nekobox: $_"
+        exit
+    }
 }
 
 # Thiết lập Nekobox tự động mở khi khởi động Windows
 function Set-AutoStart {
     Write-Host "Đang thiết lập Nekobox tự động mở khi khởi động..."
 
-    $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-    $value = "Nekobox"
-    $command = "$InstallPath\nekobox.exe"
+    try {
+        $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        $value = "Nekobox"
+        $command = "$InstallPath\nekobox.exe"
 
-    Set-ItemProperty -Path $key -Name $value -Value $command
-    Write-Host "Nekobox đã được thêm vào danh sách khởi động."
+        Set-ItemProperty -Path $key -Name $value -Value $command
+        Write-Host "Nekobox đã được thêm vào danh sách khởi động."
+    } catch {
+        Write-Host "Lỗi khi thiết lập Nekobox khởi động tự động: $_"
+        exit
+    }
 }
 
 # Pin Nekobox vào Taskbar
 function Pin-To-Taskbar {
     Write-Host "Đang pin Nekobox vào Taskbar..."
 
-    $taskbarPinCmd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
-    $shortcutPath = "$taskbarPinCmd\Nekobox.lnk"
-    
-    # Kiểm tra xem shortcut có tồn tại chưa, nếu chưa thì tạo
-    if (-not (Test-Path $shortcutPath)) {
-        $WshShell = New-Object -ComObject WScript.Shell
-        $shortcut = $WshShell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = "$InstallPath\nekobox.exe"
-        $shortcut.Save()
-    }
+    try {
+        $taskbarPinCmd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+        $shortcutPath = "$taskbarPinCmd\Nekobox.lnk"
+        
+        # Kiểm tra xem shortcut có tồn tại chưa, nếu chưa thì tạo
+        if (-not (Test-Path $shortcutPath)) {
+            $WshShell = New-Object -ComObject WScript.Shell
+            $shortcut = $WshShell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = "$InstallPath\nekobox.exe"
+            $shortcut.Save()
+        }
 
-    # Pin ứng dụng vào taskbar
-    Invoke-Expression -Command "powershell -command $shortcutPath"
-    Write-Host "Nekobox đã được pin vào Taskbar."
+        # Pin ứng dụng vào taskbar
+        Invoke-Expression -Command "powershell -command $shortcutPath"
+        Write-Host "Nekobox đã được pin vào Taskbar."
+    } catch {
+        Write-Host "Lỗi khi pin Nekobox vào Taskbar: $_"
+        exit
+    }
 }
 
 # Kiểm tra quyền quản trị
@@ -232,12 +271,6 @@ Set-AutoStart
 # Pin Nekobox vào Taskbar
 Pin-To-Taskbar
 
+
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
-
-
-
-
-
-
-
