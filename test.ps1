@@ -1,12 +1,4 @@
-# Ghi lại lỗi vào tệp log
-$logFile = "$env:USERPROFILE\Downloads\script_log.txt"
-$ErrorActionPreference = "Stop"  # Dừng script ngay khi gặp lỗi
-Start-Transcript -Path $logFile
 
-# --- Cấu hình đầu script ---
-
-# Danh sách các phiên bản Chrome và ID tệp Google Drive
-# Bạn sẽ cần nhập ID của các tệp thủ công từ Google Drive
 # Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
     # Kiểm tra xem Python đã được cài đặt chưa
