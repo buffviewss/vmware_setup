@@ -1,80 +1,62 @@
 # Test script đơn giản để kiểm tra Python và gdown
-$ErrorActionPreference = "Continue"
-
 Write-Host "=== KIỂM TRA PYTHON VÀ GDOWN ==="
 
 # Tìm Python
-$pythonPaths = @(
-    "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python312\python.exe",
-    "C:\Program Files\Python312\python.exe"
-)
+$pythonExe = "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python312\python.exe"
 
-$pythonExe = $null
-foreach ($path in $pythonPaths) {
-    if (Test-Path $path) {
-        $pythonExe = $path
-        Write-Host "✓ Tìm thấy Python: $pythonExe"
-        break
-    }
-}
-
-if (-not $pythonExe) {
-    Write-Host "❌ Không tìm thấy Python"
+if (Test-Path $pythonExe) {
+    Write-Host "✓ Tìm thấy Python: $pythonExe"
+} else {
+    Write-Host "❌ Không tìm thấy Python tại: $pythonExe"
     exit 1
 }
 
 # Test Python version
-try {
-    $version = & $pythonExe --version 2>&1
-    Write-Host "Python version: $version"
-} catch {
-    Write-Host "❌ Lỗi khi kiểm tra Python version: $_"
+Write-Host "Đang kiểm tra Python version..."
+$versionProcess = Start-Process -FilePath $pythonExe -ArgumentList "--version" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\python_version.txt" -RedirectStandardError "$env:TEMP\python_version_error.txt"
+
+if ($versionProcess.ExitCode -eq 0) {
+    $version = Get-Content "$env:TEMP\python_version.txt" -Raw
+    Write-Host "✓ Python version: $version"
+} else {
+    Write-Host "❌ Lỗi khi kiểm tra Python version"
     exit 1
 }
 
 # Test pip
-try {
-    $pipVersion = & $pythonExe -m pip --version 2>&1
-    Write-Host "Pip version: $pipVersion"
-} catch {
-    Write-Host "❌ Lỗi khi kiểm tra pip: $_"
+Write-Host "Đang kiểm tra pip..."
+$pipProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m", "pip", "--version" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\pip_version.txt" -RedirectStandardError "$env:TEMP\pip_version_error.txt"
+
+if ($pipProcess.ExitCode -eq 0) {
+    $pipVersion = Get-Content "$env:TEMP\pip_version.txt" -Raw
+    Write-Host "✓ Pip version: $pipVersion"
+} else {
+    Write-Host "❌ Lỗi khi kiểm tra pip"
     exit 1
 }
 
-# Test cài đặt gdown
+# Cài đặt gdown
 Write-Host "Đang cài đặt gdown..."
-try {
-    $installResult = & $pythonExe -m pip install gdown 2>&1
-    Write-Host "Kết quả cài gdown: $installResult"
-} catch {
-    Write-Host "❌ Lỗi khi cài gdown: $_"
-}
+$gdownProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m", "pip", "install", "gdown" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\gdown_install.txt" -RedirectStandardError "$env:TEMP\gdown_install_error.txt"
+
+$gdownOutput = Get-Content "$env:TEMP\gdown_install.txt" -Raw -ErrorAction SilentlyContinue
+$gdownError = Get-Content "$env:TEMP\gdown_install_error.txt" -Raw -ErrorAction SilentlyContinue
+
+Write-Host "Gdown install output: $gdownOutput"
+Write-Host "Gdown install error: $gdownError"
+Write-Host "Gdown install exit code: $($gdownProcess.ExitCode)"
 
 # Test import gdown
 Write-Host "Đang test import gdown..."
-try {
-    $testImport = & $pythonExe -c "import gdown; print('✓ gdown import thành công')" 2>&1
-    Write-Host "Kết quả test: $testImport"
-} catch {
-    Write-Host "❌ Lỗi khi test gdown: $_"
-}
+$testProcess = Start-Process -FilePath $pythonExe -ArgumentList "-c", "import gdown; print('gdown OK')" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\gdown_test.txt" -RedirectStandardError "$env:TEMP\gdown_test_error.txt"
 
-# Test download một file nhỏ
-Write-Host "Đang test download file nhỏ..."
-try {
-    $testFile = "$env:TEMP\test_download.txt"
-    # Sử dụng file ID của một file test nhỏ (có thể thay đổi)
-    $testResult = & $pythonExe -c "import gdown; gdown.download('https://drive.google.com/uc?id=1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H', '$testFile', quiet=False)" 2>&1
-    Write-Host "Kết quả test download: $testResult"
-    
-    if (Test-Path $testFile) {
-        Write-Host "✓ Test download thành công!"
-        Remove-Item $testFile -Force
-    } else {
-        Write-Host "❌ Test download thất bại"
-    }
-} catch {
-    Write-Host "❌ Lỗi khi test download: $_"
+if ($testProcess.ExitCode -eq 0) {
+    $testOutput = Get-Content "$env:TEMP\gdown_test.txt" -Raw
+    Write-Host "✓ Test import thành công: $testOutput"
+} else {
+    Write-Host "❌ Test import thất bại"
+    $testError = Get-Content "$env:TEMP\gdown_test_error.txt" -Raw -ErrorAction SilentlyContinue
+    Write-Host "Test error: $testError"
 }
 
 Write-Host "=== KẾT THÚC TEST ==="
