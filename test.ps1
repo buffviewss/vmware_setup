@@ -1,56 +1,66 @@
+# --- LOGGING ---
+$logFile = "$env:USERPROFILE\Downloads\script_log.txt"
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true  # (PS7+) để lệnh native tôn trọng ErrorAction
+Start-Transcript -Path $logFile
 
-# Kiểm tra và cài đặt Python và gdown
+# --- HÀM CÀI ĐẶT ---
 function Install-PythonAndGdown {
-    # Kiểm tra xem Python đã được cài đặt chưa
-    $pythonPath = Get-Command python -ErrorAction SilentlyContinue
+    Write-Host "=== Bắt đầu kiểm tra/cài đặt Python & gdown ==="
 
-    if (-not $pythonPath) {
-        Write-Host "Python chưa được cài đặt. Đang cài đặt Python bằng winget..."
+    # Kiểm tra winget
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Không tìm thấy winget. Hãy cập nhật Microsoft Store App Installer hoặc cài thủ công Python."
+    }
 
-        try {
-            # Cài đặt Python bằng winget
-            Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9" -Wait -PassThru -Verb RunAs
+    # 1) Kiểm tra Python (ưu tiên 'python', fallback 'py')
+    $pythonCmd = if (Get-Command python -ErrorAction SilentlyContinue) { "python" }
+                 elseif (Get-Command py -ErrorAction SilentlyContinue) { "py -3" }
+                 else { $null }
 
-            Write-Host "Cài đặt Python xong."
-
-            # Kiểm tra lại Python sau khi cài đặt
-            $pythonPath = Get-Command python -ErrorAction SilentlyContinue
-            if (-not $pythonPath) {
-                Write-Host "Lỗi: Python không thể cài đặt hoặc không có sẵn trong PATH."
-                exit
-            } else {
-                Write-Host "Python đã được cài đặt thành công."
-            }
-        } catch {
-            Write-Host "Lỗi khi cài đặt Python: $_"
-            exit
-        }
-    } else {
+    if (-not $pythonCmd) {
+        Write-Host "Python chưa có. Đang cài đặt bằng winget..."
+        # Có thể đổi sang phiên bản khác nếu muốn
+        Start-Process -FilePath "winget" -ArgumentList "install -e --id Python.Python.3.11" -Wait -Verb RunAs
+        # Kiểm tra lại
+        $pythonCmd = if (Get-Command python -ErrorAction SilentlyContinue) { "python" }
+                     elseif (Get-Command py -ErrorAction SilentlyContinue) { "py -3" }
+                     else { $null }
+        if (-not $pythonCmd) { throw "Cài đặt Python thất bại hoặc chưa vào PATH." }
         Write-Host "Python đã được cài đặt."
+    } else {
+        Write-Host "Đã phát hiện Python sẵn có."
     }
 
-    # Kiểm tra và cài đặt pip
+    # 2) Đảm bảo pip
     Write-Host "Đang kiểm tra pip..."
-    try {
-        python -m ensurepip --upgrade
-        Write-Host "pip đã được cài đặt thành công."
-    } catch {
-        Write-Host "Lỗi khi cài đặt pip: $_"
-        exit
-    }
+    & $pythonCmd -m ensurepip --upgrade
+    Write-Host "pip OK."
 
-    # Cài đặt gdown
-    Write-Host "Đang cài đặt gdown..."
-    try {
-        python -m pip install gdown --quiet
-        Write-Host "Cài đặt gdown xong."
-    } catch {
-        Write-Host "Lỗi khi cài đặt gdown: $_"
-        exit
-    }
+    # 3) Cài gdown
+    Write-Host "Đang cài đặt/ cập nhật gdown..."
+    & $pythonCmd -m pip install --upgrade gdown --quiet
+    Write-Host "gdown OK."
+
+    # 4) Xác minh
+    $pyVer = (& $pythonCmd --version)
+    $pipVer = (& $pythonCmd -m pip --version)
+    $gdownVer = (& $pythonCmd -m pip show gdown | Select-String -Pattern "^Version:" | ForEach-Object {$_.ToString()})
+
+    Write-Host "Python: $pyVer"
+    Write-Host "pip: $pipVer"
+    Write-Host "gdown $gdownVer"
+    Write-Host "=== Hoàn tất cài đặt ==="
 }
 
+# --- MAIN ---
+try {
+    Install-PythonAndGdown
+    Write-Host "Tất cả các bước đã hoàn thành!"
+} catch {
+    Write-Host "Có lỗi xảy ra: $($_.Exception.Message)"
+} finally {
+    Stop-Transcript | Out-Null
+}
 
-
-Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
