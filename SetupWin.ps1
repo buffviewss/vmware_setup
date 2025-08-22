@@ -4,9 +4,7 @@ $ErrorActionPreference = "Stop"  # Dừng script ngay khi gặp lỗi
 Start-Transcript -Path $logFile
 
 
-Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9" -Wait -PassThru -Verb RunAs
- python -m pip install gdown --quiet
- 
+
 # --- Cấu hình đầu script ---
 
 # Danh sách các phiên bản Chrome và ID tệp Google Drive
@@ -112,8 +110,15 @@ function Download-With-Gdown {
 # Hàm kiểm tra quyền quản trị
 function Check-AdminRights {
     try {
-        $null = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
-        $IsAdmin = $true
+        function Check-AdminRights {
+  $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+  $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
+  if (-not $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Bạn cần chạy PowerShell **Run as administrator**."
+    exit 1
+  }
+}
+
     } catch {
         $IsAdmin = $false
     }
@@ -156,26 +161,34 @@ function Set-RegionSettings {
 
 # Gỡ cài đặt Chrome nếu đã cài đặt
 function Uninstall-Chrome {
-    Write-Host "Đang kiểm tra và gỡ bỏ Google Chrome nếu có..."
-    try {
-        $chromeUninstallKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-        $chromeAppKey = Get-ChildItem -Path $chromeUninstallKey | Where-Object { $_.GetValue("DisplayName") -like "Google Chrome*" }
-
-        if ($chromeAppKey) {
-            Write-Host "Đang gỡ bỏ Google Chrome..."
-            $uninstallString = $chromeAppKey.GetValue("UninstallString")
-            
-            # Thực thi lệnh gỡ bỏ
-            Start-Process -FilePath $uninstallString -ArgumentList "/silent /uninstall" -Wait
-            Write-Host "Google Chrome đã được gỡ bỏ thành công."
-        } else {
-            Write-Host "Không tìm thấy Google Chrome cài đặt trên máy."
+  Write-Host "Đang gỡ Google Chrome (nếu có)..."
+  $paths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+  )
+  foreach ($p in $paths) {
+    Get-ChildItem $p -ErrorAction SilentlyContinue | ForEach-Object {
+      $prop = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue
+      if ($prop.DisplayName -like "Google Chrome*") {
+        $uninst = $prop.UninstallString
+        if ($uninst) {
+          # Tách file + args an toàn
+          $exe,$args = $uninst -split '\.exe"\s*',2
+          if ($exe -notmatch '\.exe"$') { $exe = $uninst } else { $exe = $exe + '.exe"' ; $args = $args.Trim() }
+          $exe = $exe.Trim('"')
+          # Thử tham số silent phổ biến
+          $extra = ' --uninstall --multi-install --chrome --force-uninstall'
+          Start-Process -FilePath $exe -ArgumentList ($args + $extra) -Wait -ErrorAction Stop
+          Write-Host "Đã gỡ Google Chrome."
+          return
         }
-    } catch {
-        Write-Host "Lỗi khi gỡ bỏ Google Chrome: $_"
-        exit
+      }
     }
+  }
+  Write-Host "Không tìm thấy Chrome để gỡ."
 }
+
 
 # Tải tệp Chrome từ Google Drive
 function Download-Chrome {
@@ -209,25 +222,17 @@ function Install-Chrome {
 
 # Khóa cập nhật tự động của Chrome
 function Disable-AutoUpdateChrome {
-    Write-Host "Đang vô hiệu hóa cập nhật tự động của Chrome..."
-    try {
-        $chromeUpdateKey = "HKLM:\SOFTWARE\Policies\Google\Update"
-        
-        # Kiểm tra nếu không có khóa thì tạo mới
-        if (-not (Test-Path $chromeUpdateKey)) {
-            New-Item -Path $chromeUpdateKey -Force
-        }
-
-        # Thiết lập khóa vô hiệu hóa cập nhật tự động
-        Set-ItemProperty -Path $chromeUpdateKey -Name "AutoUpdateCheckPeriodMinutes" -Value 0
-        Set-ItemProperty -Path $chromeUpdateKey -Name "DisableAutoUpdate" -Value 1
-
-        Write-Host "Cập nhật tự động của Chrome đã được vô hiệu hóa."
-    } catch {
-        Write-Host "Lỗi khi vô hiệu hóa cập nhật tự động: $_"
-        exit
-    }
+  $k = "HKLM:\SOFTWARE\Policies\Google\Update"
+  if (-not (Test-Path $k)) { New-Item $k -Force | Out-Null }
+  New-ItemProperty -Path $k -Name "AutoUpdateCheckPeriodMinutes" -Value 0 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $k -Name "UpdateDefault" -Value 0 -PropertyType DWord -Force | Out-Null
+  # App GUID của Chrome Stable
+  $appKey = Join-Path $k "{8A69D345-D564-463C-AFF1-A69D9E530F96}"
+  if (-not (Test-Path $appKey)) { New-Item $appKey -Force | Out-Null }
+  New-ItemProperty -Path $appKey -Name "Update" -Value 0 -PropertyType DWord -Force | Out-Null
+  Write-Host "Đã cấu hình policy tắt auto-update Chrome."
 }
+
 
 # Tải tệp Nekobox từ Google Drive
 function Download-Nekobox {
@@ -388,6 +393,7 @@ Pin-To-Taskbar
 
 Write-Host "Tất cả các bước đã hoàn thành!"
 Read-Host "Nhấn Enter để thoát"
+
 
 
 
