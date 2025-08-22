@@ -1,5 +1,6 @@
 # ===================================================================
 # Windows Setup Script - Chrome, Python, Nekobox Auto Installer
+# All-in-One Script for VM Deployment
 # Compatible with PowerShell 5.x and Windows 10/11
 # ===================================================================
 
@@ -7,15 +8,20 @@ param(
     [string]$Region = "US",
     [switch]$SkipPython,
     [switch]$SkipChrome,
-    [switch]$SkipNekobox
+    [switch]$SkipNekobox,
+    [switch]$Silent
 )
 
 # Script configuration
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"  # Changed to Continue for better VM compatibility
 $LogFile = "$env:USERPROFILE\Downloads\SetupWin_Log.txt"
 
 # Start logging
-Start-Transcript -Path $LogFile -Append
+try {
+    Start-Transcript -Path $LogFile -Append -ErrorAction SilentlyContinue
+} catch {
+    # Continue without logging if transcript fails
+}
 
 Write-Host "=== Windows Setup Script Started ===" -ForegroundColor Green
 Write-Host "Log file: $LogFile" -ForegroundColor Cyan
@@ -111,22 +117,22 @@ function Invoke-SafeCommand {
         $process.Start() | Out-Null
         
         $output = $process.StandardOutput.ReadToEnd()
-        $error = $process.StandardError.ReadToEnd()
-        
+        $errorOutput = $process.StandardError.ReadToEnd()
+
         $process.WaitForExit($TimeoutSeconds * 1000)
-        
+
         if ($process.ExitCode -eq 0) {
             return @{
                 Success = $true
                 Output = $output
-                Error = $error
+                Error = $errorOutput
                 ExitCode = $process.ExitCode
             }
         } else {
             return @{
                 Success = $false
                 Output = $output
-                Error = $error
+                Error = $errorOutput
                 ExitCode = $process.ExitCode
             }
         }
@@ -149,69 +155,140 @@ function Install-PythonAndGdown {
         Write-Status "Skipping Python installation (SkipPython flag set)" "Warning"
         return
     }
-    
+
     Write-Host "=== Installing Python and gdown ===" -ForegroundColor Yellow
-    
+
     # Check if Python is already installed
-    $pythonCheck = Invoke-SafeCommand -Command "python" -Arguments "--version"
-    if ($pythonCheck.Success) {
-        Write-Status "Python already installed: $($pythonCheck.Output.Trim())" "Success"
-    } else {
-        Write-Status "Python not found. Installing..." "Warning"
-        
-        # Try winget first
-        $wingetCheck = Invoke-SafeCommand -Command "winget" -Arguments "--version"
-        if ($wingetCheck.Success) {
-            Write-Status "Installing Python via winget..."
-            $installResult = Invoke-SafeCommand -Command "winget" -Arguments "install Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent" -TimeoutSeconds 600
-            
-            if ($installResult.Success) {
-                Write-Status "Python installed successfully via winget" "Success"
-                # Refresh environment variables
-                $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-            } else {
-                Write-Status "Winget installation failed. Opening Microsoft Store..." "Warning"
-                Start-Process "ms-windows-store://pdp/?ProductId=9NRWMJP3717K"
-                Read-Host "Please install Python from Microsoft Store and press Enter to continue"
-            }
+    try {
+        $pythonVersion = python --version 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Status "Python already installed: $pythonVersion" "Success"
         } else {
-            Write-Status "Winget not available. Opening Microsoft Store..." "Warning"
-            Start-Process "ms-windows-store://pdp/?ProductId=9NRWMJP3717K"
-            Read-Host "Please install Python from Microsoft Store and press Enter to continue"
+            throw "Python not found"
+        }
+    } catch {
+        Write-Status "Python not found. Installing..." "Warning"
+
+        # Download Python installer directly
+        $pythonUrl = "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe"
+        $pythonInstaller = "$env:TEMP\python_installer.exe"
+
+        Write-Status "Downloading Python installer..."
+        try {
+            # Use System.Net.WebClient for better VM compatibility
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            $webClient.DownloadFile($pythonUrl, $pythonInstaller)
+            $webClient.Dispose()
+
+            if (Test-Path -Path $pythonInstaller) {
+                Write-Status "Python installer downloaded" "Success"
+
+                # Install Python silently
+                Write-Status "Installing Python..."
+                $installArgs = "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0"
+                $installResult = Start-Process -FilePath $pythonInstaller -ArgumentList $installArgs -Wait -PassThru
+
+                if ($installResult.ExitCode -eq 0) {
+                    Write-Status "Python installed successfully" "Success"
+
+                    # Refresh PATH
+                    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+
+                    # Clean up installer
+                    Remove-Item -Path $pythonInstaller -Force -ErrorAction SilentlyContinue
+                } else {
+                    throw "Python installation failed with exit code: $($installResult.ExitCode)"
+                }
+            } else {
+                throw "Failed to download Python installer"
+            }
+        } catch {
+            Write-Status "Direct download failed. Trying alternative method..." "Warning"
+
+            # Fallback: Try to open Microsoft Store
+            try {
+                Start-Process "ms-windows-store://pdp/?ProductId=9NRWMJP3717K" -ErrorAction SilentlyContinue
+                if (-not $Silent) {
+                    Read-Host "Please install Python from Microsoft Store and press Enter to continue"
+                }
+            } catch {
+                Write-Status "Cannot open Microsoft Store. Please install Python manually from python.org" "Error"
+                if (-not $Silent) {
+                    Read-Host "Press Enter after installing Python to continue"
+                }
+            }
         }
     }
-    
-    # Verify Python installation
-    Start-Sleep -Seconds 3
-    $pythonCheck = Invoke-SafeCommand -Command "python" -Arguments "--version"
-    if (-not $pythonCheck.Success) {
-        Write-Status "Python installation failed or not in PATH" "Error"
-        throw "Python installation failed"
-    }
-    
+
+    # Verify Python installation with retry
+    $retryCount = 0
+    $maxRetries = 3
+
+    do {
+        Start-Sleep -Seconds 2
+        try {
+            $pythonVersion = python --version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Status "Python verification successful: $pythonVersion" "Success"
+                break
+            } else {
+                $retryCount++
+                if ($retryCount -lt $maxRetries) {
+                    Write-Status "Python verification failed, retrying... ($retryCount/$maxRetries)" "Warning"
+                } else {
+                    throw "Python not working after installation"
+                }
+            }
+        } catch {
+            $retryCount++
+            if ($retryCount -ge $maxRetries) {
+                Write-Status "Python installation verification failed" "Error"
+                throw "Python installation failed"
+            }
+        }
+    } while ($retryCount -lt $maxRetries)
+
     # Install gdown
     Write-Status "Installing gdown package..."
-    $gdownInstall = Invoke-SafeCommand -Command "python" -Arguments "-m pip install gdown --quiet --upgrade"
-    
-    if ($gdownInstall.Success) {
-        Write-Status "gdown installed successfully" "Success"
-    } else {
-        Write-Status "gdown installation failed: $($gdownInstall.Error)" "Error"
-        throw "gdown installation failed"
+    try {
+        python -m pip install gdown --quiet --upgrade 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Status "gdown installed successfully" "Success"
+        } else {
+            throw "pip install gdown failed"
+        }
+    } catch {
+        Write-Status "gdown installation failed, trying alternative..." "Warning"
+        try {
+            python -m pip install --user gdown --quiet 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Status "gdown installed successfully (user mode)" "Success"
+            } else {
+                throw "gdown installation failed completely"
+            }
+        } catch {
+            Write-Status "gdown installation failed: $($_.Exception.Message)" "Error"
+            throw "gdown installation failed"
+        }
     }
-    
+
     # Verify gdown
-    $gdownCheck = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown; print('gdown version:', getattr(gdown, '__version__', 'unknown'))`""
-    if ($gdownCheck.Success) {
-        Write-Status "gdown verification: $($gdownCheck.Output.Trim())" "Success"
-    } else {
+    try {
+        python -c "import gdown; print('gdown OK')" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Status "gdown verification successful" "Success"
+        } else {
+            throw "gdown import failed"
+        }
+    } catch {
         Write-Status "gdown verification failed" "Error"
         throw "gdown verification failed"
     }
 }
 
 # ===================================================================
-# GOOGLE DRIVE DOWNLOAD FUNCTION
+# DOWNLOAD FUNCTIONS - VM Compatible
 # ===================================================================
 
 function Get-GoogleDriveFile {
@@ -230,15 +307,84 @@ function Get-GoogleDriveFile {
         New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
     }
 
-    # Download using gdown
-    $downloadResult = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown; gdown.download('https://drive.google.com/uc?id=$FileID', '$OutputPath', quiet=False)`"" -TimeoutSeconds 600
+    # Try multiple download methods for VM compatibility
+    $downloadSuccess = $false
 
-    if ($downloadResult.Success -and (Test-Path -Path $OutputPath)) {
+    # Method 1: Try gdown if available
+    $gdownCheck = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown`"" -TimeoutSeconds 10
+    if ($gdownCheck.Success) {
+        Write-Status "Using gdown for download..."
+        $downloadResult = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown; gdown.download('https://drive.google.com/uc?id=$FileID', '$OutputPath', quiet=False)`"" -TimeoutSeconds 600
+
+        if ($downloadResult.Success -and (Test-Path -Path $OutputPath)) {
+            $downloadSuccess = $true
+        }
+    }
+
+    # Method 2: Try curl if gdown fails
+    if (-not $downloadSuccess) {
+        Write-Status "Trying curl download method..."
+        $curlUrl = "https://drive.google.com/uc?export=download&id=$FileID"
+        $curlResult = Invoke-SafeCommand -Command "curl" -Arguments "-L `"$curlUrl`" -o `"$OutputPath`"" -TimeoutSeconds 600
+
+        if ($curlResult.Success -and (Test-Path -Path $OutputPath)) {
+            $downloadSuccess = $true
+        }
+    }
+
+    # Method 3: Try PowerShell WebClient as last resort
+    if (-not $downloadSuccess) {
+        Write-Status "Trying WebClient download method..."
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            $downloadUrl = "https://drive.google.com/uc?export=download&id=$FileID"
+            $webClient.DownloadFile($downloadUrl, $OutputPath)
+            $webClient.Dispose()
+
+            if (Test-Path -Path $OutputPath) {
+                $downloadSuccess = $true
+            }
+        } catch {
+            Write-Status "WebClient download failed: $($_.Exception.Message)" "Warning"
+        }
+    }
+
+    # Verify download
+    if ($downloadSuccess -and (Test-Path -Path $OutputPath)) {
         $fileSize = (Get-Item -Path $OutputPath).Length
         Write-Status "Download completed. File size: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
         return $true
     } else {
-        Write-Status "Download failed: $($downloadResult.Error)" "Error"
+        Write-Status "All download methods failed" "Error"
+        return $false
+    }
+}
+
+# Alternative download using BITS (Background Intelligent Transfer Service)
+function Get-GoogleDriveFile-BITS {
+    param(
+        [string]$FileID,
+        [string]$OutputPath
+    )
+
+    Write-Status "Trying BITS download..."
+
+    try {
+        $downloadUrl = "https://drive.google.com/uc?export=download&id=$FileID"
+        Import-Module BitsTransfer -ErrorAction SilentlyContinue
+
+        Start-BitsTransfer -Source $downloadUrl -Destination $OutputPath -DisplayName "GoogleDriveDownload" -ErrorAction Stop | Out-Null
+
+        if (Test-Path -Path $OutputPath) {
+            Write-Status "BITS download successful" "Success"
+            return $true
+        } else {
+            Write-Status "BITS download failed" "Error"
+            return $false
+        }
+    } catch {
+        Write-Status "BITS download error: $($_.Exception.Message)" "Error"
         return $false
     }
 }
@@ -647,4 +793,133 @@ Write-Host "Press any key to exit..."
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
 # Stop logging
-Stop-Transcript
+try {
+    Stop-Transcript -ErrorAction SilentlyContinue
+} catch {
+    # Continue if transcript stop fails
+}
+
+# ===================================================================
+# BUILT-IN TESTING FUNCTIONS
+# ===================================================================
+
+function Test-Installation {
+    Write-Host ""
+    Write-Host "=== TESTING INSTALLATION ===" -ForegroundColor Yellow
+    Write-Host ""
+
+    $testResults = @()
+
+    # Test Python
+    Write-Host "Testing Python..." -ForegroundColor Cyan
+    try {
+        $pythonVersion = python --version 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Status "Python: $pythonVersion" "Success"
+            $testResults += "Python: PASS"
+        } else {
+            Write-Status "Python: Not working" "Error"
+            $testResults += "Python: FAIL"
+        }
+    } catch {
+        Write-Status "Python: Error testing" "Error"
+        $testResults += "Python: ERROR"
+    }
+
+    # Test gdown
+    Write-Host "Testing gdown..." -ForegroundColor Cyan
+    try {
+        python -c "import gdown; print('gdown OK')" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Status "gdown: Working" "Success"
+            $testResults += "gdown: PASS"
+        } else {
+            Write-Status "gdown: Not working" "Error"
+            $testResults += "gdown: FAIL"
+        }
+    } catch {
+        Write-Status "gdown: Error testing" "Error"
+        $testResults += "gdown: ERROR"
+    }
+
+    # Test Chrome
+    Write-Host "Testing Chrome..." -ForegroundColor Cyan
+    $chromePaths = @(
+        "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+    )
+
+    $chromeFound = $false
+    foreach ($path in $chromePaths) {
+        if (Test-Path -Path $path) {
+            Write-Status "Chrome: Found at $path" "Success"
+            $testResults += "Chrome: PASS"
+            $chromeFound = $true
+            break
+        }
+    }
+
+    if (-not $chromeFound) {
+        Write-Status "Chrome: Not found" "Error"
+        $testResults += "Chrome: FAIL"
+    }
+
+    # Test Nekobox
+    Write-Host "Testing Nekobox..." -ForegroundColor Cyan
+    if (Test-Path -Path "$env:ProgramFiles\Nekobox") {
+        $nekoboxExe = Get-ChildItem -Path "$env:ProgramFiles\Nekobox" -Filter "*.exe" -ErrorAction SilentlyContinue
+        if ($nekoboxExe) {
+            Write-Status "Nekobox: Installed ($($nekoboxExe.Count) executables)" "Success"
+            $testResults += "Nekobox: PASS"
+        } else {
+            Write-Status "Nekobox: Directory exists but no executables" "Error"
+            $testResults += "Nekobox: FAIL"
+        }
+    } else {
+        Write-Status "Nekobox: Not installed" "Error"
+        $testResults += "Nekobox: FAIL"
+    }
+
+    # Test auto-start
+    Write-Host "Testing auto-start..." -ForegroundColor Cyan
+    try {
+        $startupPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        $nekoboxStartup = Get-ItemProperty -Path $startupPath -Name "Nekobox" -ErrorAction SilentlyContinue
+        if ($nekoboxStartup) {
+            Write-Status "Auto-start: Configured" "Success"
+            $testResults += "Auto-start: PASS"
+        } else {
+            Write-Status "Auto-start: Not configured" "Error"
+            $testResults += "Auto-start: FAIL"
+        }
+    } catch {
+        Write-Status "Auto-start: Error checking" "Error"
+        $testResults += "Auto-start: ERROR"
+    }
+
+    # Summary
+    Write-Host ""
+    Write-Host "=== TEST SUMMARY ===" -ForegroundColor Yellow
+    $passCount = ($testResults | Where-Object { $_ -like "*PASS*" }).Count
+    $failCount = ($testResults | Where-Object { $_ -like "*FAIL*" }).Count
+    $errorCount = ($testResults | Where-Object { $_ -like "*ERROR*" }).Count
+
+    Write-Host "Passed: $passCount" -ForegroundColor Green
+    Write-Host "Failed: $failCount" -ForegroundColor Red
+    Write-Host "Errors: $errorCount" -ForegroundColor Magenta
+
+    if ($failCount -eq 0 -and $errorCount -eq 0) {
+        Write-Host "🎉 All tests passed!" -ForegroundColor Green
+    } else {
+        Write-Host "⚠️ Some components need attention" -ForegroundColor Yellow
+    }
+}
+
+# Run tests if requested
+if ($args -contains "-Test" -or $args -contains "--test") {
+    Test-Installation
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 0
+}
