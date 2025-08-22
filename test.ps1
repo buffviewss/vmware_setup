@@ -41,40 +41,67 @@ function Install-PythonAndGdown {
         "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python39\python.exe",
         "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python310\python.exe",
         "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python311\python.exe",
-        "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python312\python.exe"
+        "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python312\python.exe",
+        "C:\Python39\python.exe",
+        "C:\Python310\python.exe",
+        "C:\Python311\python.exe",
+        "C:\Python312\python.exe"
     )
 
     $pythonExe = $null
+    Write-Host "Đang tìm kiếm Python trong các thư mục..."
     foreach ($path in $pythonPaths) {
+        Write-Host "Kiểm tra: $path"
         if (Test-Path $path) {
             $pythonExe = $path
-            Write-Host "Tìm thấy Python tại: $pythonExe"
+            Write-Host "✓ Tìm thấy Python tại: $pythonExe"
             break
         }
     }
 
-    # Nếu không tìm thấy Python, cài đặt mới
+    # Nếu không tìm thấy Python trong đường dẫn cố định, thử tìm bằng where.exe
+    if (-not $pythonExe) {
+        Write-Host "Không tìm thấy Python trong đường dẫn cố định. Đang tìm bằng where.exe..."
+        try {
+            $whereResult = where.exe python.exe 2>$null
+            if ($whereResult -and (Test-Path $whereResult[0])) {
+                # Kiểm tra xem có phải Windows Store alias không
+                $testResult = & $whereResult[0] --version 2>&1
+                if ($testResult -notlike "*Microsoft Store*" -and $testResult -like "*Python*") {
+                    $pythonExe = $whereResult[0]
+                    Write-Host "✓ Tìm thấy Python bằng where.exe: $pythonExe"
+                }
+            }
+        } catch {
+            Write-Host "Không thể sử dụng where.exe để tìm Python."
+        }
+    }
+
+    # Nếu vẫn không tìm thấy Python, cài đặt mới
     if (-not $pythonExe) {
         Write-Host "Python chưa được cài đặt. Đang cài đặt Python bằng winget..."
 
         try {
             # Cài đặt Python bằng winget
-            winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent
+            $wingetResult = winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent 2>&1
+            Write-Host "Kết quả winget: $wingetResult"
 
             Write-Host "Cài đặt Python xong. Đang tìm lại Python..."
 
             # Tìm lại Python sau khi cài đặt
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 5
             foreach ($path in $pythonPaths) {
+                Write-Host "Kiểm tra lại: $path"
                 if (Test-Path $path) {
                     $pythonExe = $path
-                    Write-Host "Tìm thấy Python tại: $pythonExe"
+                    Write-Host "✓ Tìm thấy Python sau khi cài đặt: $pythonExe"
                     break
                 }
             }
 
             if (-not $pythonExe) {
                 Write-Host "Lỗi: Python không thể cài đặt hoặc không tìm thấy."
+                Write-Host "Vui lòng cài đặt Python thủ công từ python.org"
                 exit 1
             }
         } catch {
@@ -82,25 +109,34 @@ function Install-PythonAndGdown {
             exit 1
         }
     } else {
-        Write-Host "Python đã được cài đặt."
+        Write-Host "✓ Python đã được tìm thấy."
     }
 
     # Kiểm tra và cài đặt pip
-    Write-Host "Đang kiểm tra pip..."
+    Write-Host "Đang kiểm tra pip với Python tại: $pythonExe"
     try {
-        & $pythonExe -m ensurepip --upgrade 2>$null
-        Write-Host "pip đã được cài đặt thành công."
+        & $pythonExe -m ensurepip --upgrade 2>&1 | Out-Null
+        Write-Host "pip đã được kiểm tra thành công."
     } catch {
         Write-Host "Cảnh báo: Không thể cài đặt pip, nhưng có thể đã có sẵn."
     }
 
     # Cài đặt gdown
-    Write-Host "Đang cài đặt gdown..."
+    Write-Host "Đang cài đặt gdown với Python tại: $pythonExe"
     try {
-        & $pythonExe -m pip install gdown --quiet
+        $gdownResult = & $pythonExe -m pip install gdown --quiet 2>&1
         Write-Host "Cài đặt gdown xong."
+
+        # Kiểm tra xem gdown đã được cài đặt thành công chưa
+        $testGdown = & $pythonExe -c "import gdown; print('gdown OK')" 2>&1
+        if ($testGdown -like "*gdown OK*") {
+            Write-Host "Xác nhận gdown đã được cài đặt thành công."
+        } else {
+            throw "Gdown không được cài đặt đúng cách."
+        }
     } catch {
         Write-Host "Lỗi khi cài đặt gdown: $_"
+        Write-Host "Chi tiết lỗi: $gdownResult"
         exit 1
     }
 
