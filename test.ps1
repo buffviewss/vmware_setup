@@ -30,28 +30,52 @@ $InstallPath = "$env:ProgramFiles\Nekobox"
 
 # Kiểm tra và cài đặt Python và gdown
 function Install-PythonAndGdown {
-    # Kiểm tra xem Python đã được cài đặt chưa
-    $pythonPath = Get-Command python -ErrorAction SilentlyContinue
+    Write-Host "Đang kiểm tra và cài đặt Python..."
 
-    if (-not $pythonPath) {
+    # Tìm Python executable thực tế (tránh Windows Store alias)
+    $pythonPaths = @(
+        "C:\Program Files\Python39\python.exe",
+        "C:\Program Files\Python310\python.exe",
+        "C:\Program Files\Python311\python.exe",
+        "C:\Program Files\Python312\python.exe",
+        "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python39\python.exe",
+        "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python310\python.exe",
+        "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python311\python.exe",
+        "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python312\python.exe"
+    )
+
+    $pythonExe = $null
+    foreach ($path in $pythonPaths) {
+        if (Test-Path $path) {
+            $pythonExe = $path
+            Write-Host "Tìm thấy Python tại: $pythonExe"
+            break
+        }
+    }
+
+    # Nếu không tìm thấy Python, cài đặt mới
+    if (-not $pythonExe) {
         Write-Host "Python chưa được cài đặt. Đang cài đặt Python bằng winget..."
 
         try {
             # Cài đặt Python bằng winget
-            Start-Process -FilePath "winget" -ArgumentList "install Python.Python.3.9 --accept-package-agreements --accept-source-agreements" -Wait -NoNewWindow
+            winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent
 
-            Write-Host "Cài đặt Python xong."
+            Write-Host "Cài đặt Python xong. Đang tìm lại Python..."
 
-            # Refresh PATH environment variable
-            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+            # Tìm lại Python sau khi cài đặt
+            Start-Sleep -Seconds 3
+            foreach ($path in $pythonPaths) {
+                if (Test-Path $path) {
+                    $pythonExe = $path
+                    Write-Host "Tìm thấy Python tại: $pythonExe"
+                    break
+                }
+            }
 
-            # Kiểm tra lại Python sau khi cài đặt
-            $pythonPath = Get-Command python -ErrorAction SilentlyContinue
-            if (-not $pythonPath) {
-                Write-Host "Lỗi: Python không thể cài đặt hoặc không có sẵn trong PATH."
+            if (-not $pythonExe) {
+                Write-Host "Lỗi: Python không thể cài đặt hoặc không tìm thấy."
                 exit 1
-            } else {
-                Write-Host "Python đã được cài đặt thành công."
             }
         } catch {
             Write-Host "Lỗi khi cài đặt Python: $_"
@@ -64,22 +88,24 @@ function Install-PythonAndGdown {
     # Kiểm tra và cài đặt pip
     Write-Host "Đang kiểm tra pip..."
     try {
-        python -m ensurepip --upgrade
+        & $pythonExe -m ensurepip --upgrade 2>$null
         Write-Host "pip đã được cài đặt thành công."
     } catch {
-        Write-Host "Lỗi khi cài đặt pip: $_"
-        exit 1
+        Write-Host "Cảnh báo: Không thể cài đặt pip, nhưng có thể đã có sẵn."
     }
 
     # Cài đặt gdown
     Write-Host "Đang cài đặt gdown..."
     try {
-        python -m pip install gdown --quiet
+        & $pythonExe -m pip install gdown --quiet
         Write-Host "Cài đặt gdown xong."
     } catch {
         Write-Host "Lỗi khi cài đặt gdown: $_"
         exit 1
     }
+
+    # Lưu đường dẫn Python để sử dụng sau này
+    $global:PythonExecutable = $pythonExe
 }
 
 
@@ -91,11 +117,19 @@ function Install-PythonAndGdown {
 function Get-FileWithGdown {
     param([string]$FileID, [string]$OutputPath)
 
-    # Chạy Python với lệnh gdown từ PowerShell
-    $pythonCmd = "python -m gdown https://drive.google.com/uc?id=$FileID -O `"$OutputPath`""
+    # Sử dụng Python executable đã tìm thấy
+    if (-not $global:PythonExecutable) {
+        Write-Host "Lỗi: Không tìm thấy Python executable."
+        exit 1
+    }
+
     try {
         Write-Host "Đang tải tệp từ Google Drive bằng gdown..."
-        Invoke-Expression $pythonCmd
+        & $global:PythonExecutable -m gdown "https://drive.google.com/uc?id=$FileID" -O "$OutputPath"
+
+        if (-not (Test-Path $OutputPath)) {
+            throw "Tệp không được tải xuống thành công."
+        }
     } catch {
         Write-Host "Lỗi khi tải tệp bằng gdown: $_"
         exit 1
