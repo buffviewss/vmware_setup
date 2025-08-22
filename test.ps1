@@ -191,7 +191,7 @@ function Download-Chrome {
 function Install-Chrome {
     Write-Host "Đang cài đặt Chrome..."
     try {
-        Start-Process -FilePath $DownloadPathChrome -ArgumentList "/silent /install" -Wait
+        Start-Process -FilePath "$DownloadPathChrome" -ArgumentList "/silent /install" -Wait
         Write-Host "Cài đặt Chrome xong."
     } catch {
         Write-Host "Lỗi khi cài đặt Chrome: $_"
