@@ -31,13 +31,38 @@ Write-Host ""
 # CONFIGURATION
 # ===================================================================
 
-# Chrome versions with Google Drive file IDs
+# Chrome versions with multiple download sources
 $ChromeVersions = @{
-    1 = @{ Name = "Chrome 135.0.7049.96"; ID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H" }
-    2 = @{ Name = "Chrome 136.0.7103.114"; ID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc" }
-    3 = @{ Name = "Chrome 137.0.7151.120"; ID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6" }
-    4 = @{ Name = "Chrome 138.0.7194.0"; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
-    5 = @{ Name = "Chrome 141.0.7340.0"; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
+    1 = @{
+        Name = "Chrome Latest Stable"
+        GoogleDriveID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H"
+        DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+        BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+    }
+    2 = @{
+        Name = "Chrome 136.0.7103.114"
+        GoogleDriveID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc"
+        DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+        BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+    }
+    3 = @{
+        Name = "Chrome 137.0.7151.120"
+        GoogleDriveID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6"
+        DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+        BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+    }
+    4 = @{
+        Name = "Chrome Enterprise MSI"
+        GoogleDriveID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda"
+        DirectURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+        BackupURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+    }
+    5 = @{
+        Name = "Chrome Beta Channel"
+        GoogleDriveID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7"
+        DirectURL = "https://dl.google.com/chrome/install/beta/chrome_installer.exe"
+        BackupURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+    }
 }
 
 # Nekobox file ID
@@ -291,14 +316,68 @@ function Install-PythonAndGdown {
 # DOWNLOAD FUNCTIONS - VM Compatible
 # ===================================================================
 
-function Get-GoogleDriveFile {
+function Test-FileIntegrity {
     param(
-        [string]$FileID,
+        [string]$FilePath,
+        [int]$MinSizeKB = 1024
+    )
+
+    if (-not (Test-Path -Path $FilePath)) {
+        return @{ Valid = $false; Reason = "File does not exist" }
+    }
+
+    $fileSize = (Get-Item -Path $FilePath).Length
+
+    if ($fileSize -lt ($MinSizeKB * 1024)) {
+        return @{ Valid = $false; Reason = "File too small ($fileSize bytes)" }
+    }
+
+    # Check if file is HTML (common Google Drive error)
+    try {
+        $firstLine = Get-Content -Path $FilePath -TotalCount 1 -ErrorAction SilentlyContinue
+        if ($firstLine -like "*<html*" -or $firstLine -like "*<!DOCTYPE*") {
+            return @{ Valid = $false; Reason = "File is HTML (Google Drive error page)" }
+        }
+    } catch {
+        # If we can't read the file, it might be binary (which is good for installers)
+    }
+
+    # Check file signature for executables
+    try {
+        $extension = [System.IO.Path]::GetExtension($FilePath).ToLower()
+        if ($extension -eq ".exe") {
+            $bytes = Get-Content -Path $FilePath -TotalCount 2 -AsByteStream -ErrorAction SilentlyContinue
+            if ($bytes[0] -eq 0x4D -and $bytes[1] -eq 0x5A) {  # MZ header
+                return @{ Valid = $true; Reason = "Valid PE executable" }
+            } else {
+                return @{ Valid = $false; Reason = "Invalid executable header" }
+            }
+        } elseif ($extension -eq ".msi") {
+            # MSI files start with specific signature
+            $bytes = Get-Content -Path $FilePath -TotalCount 8 -AsByteStream -ErrorAction SilentlyContinue
+            if ($bytes[0] -eq 0xD0 -and $bytes[1] -eq 0xCF) {  # MSI signature
+                return @{ Valid = $true; Reason = "Valid MSI file" }
+            } else {
+                return @{ Valid = $false; Reason = "Invalid MSI header" }
+            }
+        }
+    } catch {
+        # If byte reading fails, assume it's valid if size is OK
+        return @{ Valid = $true; Reason = "Size check passed, header check failed" }
+    }
+
+    return @{ Valid = $true; Reason = "File appears valid" }
+}
+
+function Get-FileWithMultipleMethods {
+    param(
+        [string]$GoogleDriveID = "",
+        [string]$DirectURL = "",
+        [string]$BackupURL = "",
         [string]$OutputPath
     )
 
-    Write-Status "Downloading file from Google Drive..."
-    Write-Status "File ID: $FileID"
+    Write-Status "Downloading file with multiple methods..."
     Write-Status "Output: $OutputPath"
 
     # Create output directory if it doesn't exist
@@ -307,58 +386,94 @@ function Get-GoogleDriveFile {
         New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
     }
 
-    # Try multiple download methods for VM compatibility
     $downloadSuccess = $false
+    $downloadMethods = @()
 
-    # Method 1: Try gdown if available
-    $gdownCheck = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown`"" -TimeoutSeconds 10
-    if ($gdownCheck.Success) {
-        Write-Status "Using gdown for download..."
-        $downloadResult = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown; gdown.download('https://drive.google.com/uc?id=$FileID', '$OutputPath', quiet=False)`"" -TimeoutSeconds 600
-
-        if ($downloadResult.Success -and (Test-Path -Path $OutputPath)) {
-            $downloadSuccess = $true
-        }
+    # Add download methods in order of preference
+    if ($DirectURL) {
+        $downloadMethods += @{ Method = "Direct URL"; URL = $DirectURL }
+    }
+    if ($BackupURL) {
+        $downloadMethods += @{ Method = "Backup URL"; URL = $BackupURL }
+    }
+    if ($GoogleDriveID) {
+        $downloadMethods += @{ Method = "Google Drive (gdown)"; URL = "https://drive.google.com/uc?id=$GoogleDriveID" }
+        $downloadMethods += @{ Method = "Google Drive (curl)"; URL = "https://drive.google.com/uc?export=download&id=$GoogleDriveID" }
     }
 
-    # Method 2: Try curl if gdown fails
-    if (-not $downloadSuccess) {
-        Write-Status "Trying curl download method..."
-        $curlUrl = "https://drive.google.com/uc?export=download&id=$FileID"
-        $curlResult = Invoke-SafeCommand -Command "curl" -Arguments "-L `"$curlUrl`" -o `"$OutputPath`"" -TimeoutSeconds 600
+    foreach ($method in $downloadMethods) {
+        Write-Status "Trying: $($method.Method)"
 
-        if ($curlResult.Success -and (Test-Path -Path $OutputPath)) {
-            $downloadSuccess = $true
-        }
-    }
-
-    # Method 3: Try PowerShell WebClient as last resort
-    if (-not $downloadSuccess) {
-        Write-Status "Trying WebClient download method..."
         try {
-            $webClient = New-Object System.Net.WebClient
-            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            $downloadUrl = "https://drive.google.com/uc?export=download&id=$FileID"
-            $webClient.DownloadFile($downloadUrl, $OutputPath)
-            $webClient.Dispose()
-
+            # Remove existing file if it exists and is empty/corrupted
             if (Test-Path -Path $OutputPath) {
+                $existingSize = (Get-Item -Path $OutputPath).Length
+                if ($existingSize -lt 1024) {  # Less than 1KB, probably corrupted
+                    Remove-Item -Path $OutputPath -Force
+                }
+            }
+
+            if ($method.Method -like "*gdown*") {
+                # Try gdown method
+                $gdownCheck = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown`"" -TimeoutSeconds 5
+                if ($gdownCheck.Success) {
+                    $downloadResult = Invoke-SafeCommand -Command "python" -Arguments "-c `"import gdown; gdown.download('$($method.URL)', '$OutputPath', quiet=False)`"" -TimeoutSeconds 300
+                    if ($downloadResult.Success) {
+                        $downloadSuccess = $true
+                    }
+                }
+            } elseif ($method.Method -like "*curl*") {
+                # Try curl method
+                $curlResult = Invoke-SafeCommand -Command "curl" -Arguments "-L `"$($method.URL)`" -o `"$OutputPath`" --fail --silent --show-error" -TimeoutSeconds 300
+                if ($curlResult.Success) {
+                    $downloadSuccess = $true
+                }
+            } else {
+                # Try WebClient method for direct URLs
+                $webClient = New-Object System.Net.WebClient
+                $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                $webClient.DownloadFile($method.URL, $OutputPath)
+                $webClient.Dispose()
                 $downloadSuccess = $true
             }
+
+            # Verify download with integrity check
+            if ($downloadSuccess -and (Test-Path -Path $OutputPath)) {
+                $integrityCheck = Test-FileIntegrity -FilePath $OutputPath -MinSizeKB 1024
+                if ($integrityCheck.Valid) {
+                    $fileSize = (Get-Item -Path $OutputPath).Length
+                    Write-Status "$($method.Method) successful. File size: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
+                    Write-Status "File integrity: $($integrityCheck.Reason)" "Success"
+                    return $true
+                } else {
+                    Write-Status "$($method.Method) downloaded corrupted file: $($integrityCheck.Reason)" "Warning"
+                    Remove-Item -Path $OutputPath -Force -ErrorAction SilentlyContinue
+                    $downloadSuccess = $false
+                }
+            }
+
         } catch {
-            Write-Status "WebClient download failed: $($_.Exception.Message)" "Warning"
+            Write-Status "$($method.Method) failed: $($_.Exception.Message)" "Warning"
+            $downloadSuccess = $false
+        }
+
+        if ($downloadSuccess) {
+            break
         }
     }
 
-    # Verify download
-    if ($downloadSuccess -and (Test-Path -Path $OutputPath)) {
-        $fileSize = (Get-Item -Path $OutputPath).Length
-        Write-Status "Download completed. File size: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
-        return $true
-    } else {
-        Write-Status "All download methods failed" "Error"
-        return $false
-    }
+    Write-Status "All download methods failed for this file" "Error"
+    return $false
+}
+
+# Simplified Google Drive download for Nekobox
+function Get-GoogleDriveFile {
+    param(
+        [string]$FileID,
+        [string]$OutputPath
+    )
+
+    return Get-FileWithMultipleMethods -GoogleDriveID $FileID -OutputPath $OutputPath
 }
 
 # Alternative download using BITS (Background Intelligent Transfer Service)
@@ -488,15 +603,25 @@ function Select-ChromeVersion {
     }
 
     do {
-        $selection = Read-Host "Select Chrome version (1-5)"
+        if ($Silent) {
+            $selection = "1"  # Default to first option in silent mode
+            Write-Status "Silent mode: Auto-selecting option 1" "Info"
+        } else {
+            $selection = Read-Host "Select Chrome version (1-5)"
+        }
+
         $selectionInt = 0
 
         if ([int]::TryParse($selection, [ref]$selectionInt) -and $ChromeVersions.ContainsKey($selectionInt)) {
             $selectedVersion = $ChromeVersions[$selectionInt]
             Write-Status "Selected: $($selectedVersion.Name)" "Success"
-            return $selectedVersion.ID
+            return $selectionInt  # Return the key, not the ID
         } else {
             Write-Status "Invalid selection. Please choose 1-5." "Error"
+            if ($Silent) {
+                Write-Status "Silent mode: Using default option 1" "Warning"
+                return 1
+            }
         }
     } while ($true)
 }
@@ -513,53 +638,211 @@ function Install-Chrome {
     Remove-ExistingChrome
 
     # Select Chrome version
-    $chromeFileID = Select-ChromeVersion
+    $selectedVersion = Select-ChromeVersion
+    $chromeConfig = $ChromeVersions[$selectedVersion]
 
-    # Download Chrome installer
+    # Download Chrome installer with multiple methods
     Write-Status "Downloading Chrome installer..."
-    $downloadSuccess = Get-GoogleDriveFile -FileID $chromeFileID -OutputPath $ChromeInstallerPath
+    $downloadSuccess = Get-FileWithMultipleMethods -GoogleDriveID $chromeConfig.GoogleDriveID -DirectURL $chromeConfig.DirectURL -BackupURL $chromeConfig.BackupURL -OutputPath $ChromeInstallerPath
 
     if (-not $downloadSuccess) {
-        Write-Status "Failed to download Chrome installer" "Error"
+        Write-Status "All Chrome download methods failed. Trying manual fallback..." "Warning"
+
+        # Emergency method 1: Try winget
+        try {
+            Write-Status "Trying winget Chrome installation..."
+            $wingetResult = Invoke-SafeCommand -Command "winget" -Arguments "install Google.Chrome --accept-package-agreements --accept-source-agreements --silent" -TimeoutSeconds 300
+
+            if ($wingetResult.Success) {
+                Write-Status "Chrome installed via winget" "Success"
+
+                # Still try to disable auto-update
+                try {
+                    $policyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
+                    if (-not (Test-Path -Path $policyPath)) {
+                        New-Item -Path $policyPath -Force | Out-Null
+                    }
+                    New-ItemProperty -Path $policyPath -Name "UpdateDefault" -Value 0 -PropertyType DWord -Force | Out-Null
+                    Write-Status "Chrome auto-update disabled" "Success"
+                } catch {
+                    Write-Status "Could not disable auto-update" "Warning"
+                }
+
+                return  # Skip file-based installation
+            }
+        } catch {
+            Write-Status "Winget installation failed" "Warning"
+        }
+
+        # Emergency method 2: Direct Google download with integrity check
+        try {
+            Write-Status "Trying Google's official Chrome download..."
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            $webClient.DownloadFile("https://dl.google.com/chrome/install/latest/chrome_installer.exe", $ChromeInstallerPath)
+            $webClient.Dispose()
+
+            if (Test-Path -Path $ChromeInstallerPath) {
+                $integrityCheck = Test-FileIntegrity -FilePath $ChromeInstallerPath -MinSizeKB 1024
+                if ($integrityCheck.Valid) {
+                    Write-Status "Emergency download successful: $($integrityCheck.Reason)" "Success"
+                    $downloadSuccess = $true
+                } else {
+                    Write-Status "Emergency download corrupted: $($integrityCheck.Reason)" "Warning"
+                    Remove-Item -Path $ChromeInstallerPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {
+            Write-Status "Emergency download failed: $($_.Exception.Message)" "Error"
+        }
+    }
+
+    if (-not $downloadSuccess) {
+        Write-Status "Failed to download Chrome installer from any source" "Error"
         throw "Chrome download failed"
+    }
+
+    # Verify installer file
+    if (-not (Test-Path -Path $ChromeInstallerPath)) {
+        Write-Status "Chrome installer file not found after download" "Error"
+        throw "Chrome installer not found"
+    }
+
+    $installerSize = (Get-Item -Path $ChromeInstallerPath).Length
+    if ($installerSize -lt 1024) {
+        Write-Status "Chrome installer file is too small ($installerSize bytes), likely corrupted" "Error"
+        Remove-Item -Path $ChromeInstallerPath -Force -ErrorAction SilentlyContinue
+        throw "Chrome installer corrupted"
+    }
+
+    Write-Status "Chrome installer verified: $([math]::Round($installerSize/1MB, 2)) MB"
+
+    # Validate installer file before installation
+    Write-Status "Validating Chrome installer..."
+    try {
+        $fileInfo = Get-Item -Path $ChromeInstallerPath
+        $fileSize = $fileInfo.Length
+        $fileName = $fileInfo.Name
+
+        Write-Status "Installer file: $fileName ($([math]::Round($fileSize/1MB, 2)) MB)"
+
+        # Check if file is executable
+        if ($fileName -notmatch '\.(exe|msi)$') {
+            Write-Status "Downloaded file is not an installer (wrong extension)" "Error"
+            throw "Invalid installer file"
+        }
+
+        # Check minimum file size (Chrome installer should be at least 1MB)
+        if ($fileSize -lt 1048576) {
+            Write-Status "Installer file too small, likely corrupted or HTML error page" "Error"
+
+            # Try to read first few bytes to check if it's HTML
+            $firstBytes = Get-Content -Path $ChromeInstallerPath -TotalCount 1 -Raw -ErrorAction SilentlyContinue
+            if ($firstBytes -like "*<html*" -or $firstBytes -like "*<!DOCTYPE*") {
+                Write-Status "Downloaded file is HTML (probably Google Drive error page)" "Error"
+                Remove-Item -Path $ChromeInstallerPath -Force -ErrorAction SilentlyContinue
+                throw "Downloaded HTML instead of installer"
+            } else {
+                throw "Installer file corrupted or incomplete"
+            }
+        }
+
+        Write-Status "Installer validation passed" "Success"
+
+    } catch {
+        Write-Status "Installer validation failed: $($_.Exception.Message)" "Error"
+
+        # Try one more download with direct Google URL
+        Write-Status "Attempting emergency Chrome download..." "Warning"
+        try {
+            Remove-Item -Path $ChromeInstallerPath -Force -ErrorAction SilentlyContinue
+
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            $webClient.DownloadFile("https://dl.google.com/chrome/install/latest/chrome_installer.exe", $ChromeInstallerPath)
+            $webClient.Dispose()
+
+            if (Test-Path -Path $ChromeInstallerPath) {
+                $emergencySize = (Get-Item -Path $ChromeInstallerPath).Length
+                if ($emergencySize -gt 1048576) {
+                    Write-Status "Emergency download successful: $([math]::Round($emergencySize/1MB, 2)) MB" "Success"
+                } else {
+                    throw "Emergency download also failed"
+                }
+            } else {
+                throw "Emergency download failed"
+            }
+        } catch {
+            Write-Status "Emergency Chrome download failed: $($_.Exception.Message)" "Error"
+            throw "All Chrome download attempts failed"
+        }
     }
 
     # Install Chrome
     Write-Status "Installing Chrome..."
-    if (Test-Path -Path $ChromeInstallerPath) {
-        $installResult = Invoke-SafeCommand -Command $ChromeInstallerPath -Arguments "/silent /install" -TimeoutSeconds 300
+    try {
+        # Try different installation methods based on file extension
+        $fileExtension = [System.IO.Path]::GetExtension($ChromeInstallerPath).ToLower()
 
-        if ($installResult.Success) {
-            Write-Status "Chrome installed successfully" "Success"
-
-            # Disable Chrome auto-update
-            Write-Status "Disabling Chrome auto-update..."
-            try {
-                $policyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
-                if (-not (Test-Path -Path $policyPath)) {
-                    New-Item -Path $policyPath -Force | Out-Null
-                }
-
-                New-ItemProperty -Path $policyPath -Name "AutoUpdateCheckPeriodMinutes" -Value 0 -PropertyType DWord -Force | Out-Null
-                New-ItemProperty -Path $policyPath -Name "UpdateDefault" -Value 0 -PropertyType DWord -Force | Out-Null
-
-                $chromeAppPath = "$policyPath\{8A69D345-D564-463C-AFF1-A69D9E530F96}"
-                if (-not (Test-Path -Path $chromeAppPath)) {
-                    New-Item -Path $chromeAppPath -Force | Out-Null
-                }
-                New-ItemProperty -Path $chromeAppPath -Name "Update" -Value 0 -PropertyType DWord -Force | Out-Null
-
-                Write-Status "Chrome auto-update disabled" "Success"
-            } catch {
-                Write-Status "Failed to disable Chrome auto-update: $($_.Exception.Message)" "Warning"
-            }
+        if ($fileExtension -eq ".msi") {
+            # MSI installation
+            $installArgs = "/i `"$ChromeInstallerPath`" /quiet /norestart ALLUSERS=1"
+            $installResult = Invoke-SafeCommand -Command "msiexec" -Arguments $installArgs -TimeoutSeconds 300
         } else {
-            Write-Status "Chrome installation failed: $($installResult.Error)" "Error"
-            throw "Chrome installation failed"
+            # EXE installation - try multiple argument combinations
+            $installArgsList = @(
+                "/silent /install",
+                "--silent --install",
+                "/S",
+                "--system-level --do-not-launch-chrome"
+            )
+
+            $installSuccess = $false
+            foreach ($installArgs in $installArgsList) {
+                Write-Status "Trying installation with args: $installArgs"
+                $installResult = Invoke-SafeCommand -Command $ChromeInstallerPath -Arguments $installArgs -TimeoutSeconds 300
+
+                if ($installResult.Success -or $installResult.ExitCode -eq 0) {
+                    $installSuccess = $true
+                    break
+                }
+            }
+
+            if (-not $installSuccess) {
+                throw "All installation methods failed"
+            }
         }
-    } else {
-        Write-Status "Chrome installer not found" "Error"
-        throw "Chrome installer not found"
+
+        Write-Status "Chrome installation command completed" "Success"
+
+        # Wait for installation to complete
+        Start-Sleep -Seconds 5
+
+        # Disable Chrome auto-update
+        Write-Status "Disabling Chrome auto-update..."
+        try {
+            $policyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
+            if (-not (Test-Path -Path $policyPath)) {
+                New-Item -Path $policyPath -Force | Out-Null
+            }
+
+            New-ItemProperty -Path $policyPath -Name "AutoUpdateCheckPeriodMinutes" -Value 0 -PropertyType DWord -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name "UpdateDefault" -Value 0 -PropertyType DWord -Force | Out-Null
+
+            $chromeAppPath = "$policyPath\{8A69D345-D564-463C-AFF1-A69D9E530F96}"
+            if (-not (Test-Path -Path $chromeAppPath)) {
+                New-Item -Path $chromeAppPath -Force | Out-Null
+            }
+            New-ItemProperty -Path $chromeAppPath -Name "Update" -Value 0 -PropertyType DWord -Force | Out-Null
+
+            Write-Status "Chrome auto-update disabled" "Success"
+        } catch {
+            Write-Status "Failed to disable Chrome auto-update: $($_.Exception.Message)" "Warning"
+        }
+
+    } catch {
+        Write-Status "Chrome installation error: $($_.Exception.Message)" "Error"
+        throw "Chrome installation failed"
     }
 
     # Clean up installer
