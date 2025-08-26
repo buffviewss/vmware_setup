@@ -65,8 +65,13 @@ $ChromeVersions = @{
     }
 }
 
-# Nekobox file ID
-$NekoboxFileID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"
+# Nekobox configuration with multiple sources
+$NekoboxConfig = @{
+    GoogleDriveID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"
+    BackupGoogleDriveID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"  # Same for now, can be updated
+    DirectURL = ""  # Add direct download URL if available
+    GitHubURL = ""  # Add GitHub release URL if available
+}
 
 # Paths
 $DownloadsPath = "$env:USERPROFILE\Downloads"
@@ -342,23 +347,44 @@ function Test-FileIntegrity {
         # If we can't read the file, it might be binary (which is good for installers)
     }
 
-    # Check file signature for executables
+    # Check file signature for executables (PowerShell 5.x compatible)
     try {
         $extension = [System.IO.Path]::GetExtension($FilePath).ToLower()
         if ($extension -eq ".exe") {
-            $bytes = Get-Content -Path $FilePath -TotalCount 2 -AsByteStream -ErrorAction SilentlyContinue
-            if ($bytes[0] -eq 0x4D -and $bytes[1] -eq 0x5A) {  # MZ header
+            # Read first few bytes using .NET FileStream for PowerShell 5.x compatibility
+            $fileStream = [System.IO.File]::OpenRead($FilePath)
+            $buffer = New-Object byte[] 2
+            $fileStream.Read($buffer, 0, 2) | Out-Null
+            $fileStream.Close()
+
+            if ($buffer[0] -eq 0x4D -and $buffer[1] -eq 0x5A) {  # MZ header
                 return @{ Valid = $true; Reason = "Valid PE executable" }
             } else {
                 return @{ Valid = $false; Reason = "Invalid executable header" }
             }
         } elseif ($extension -eq ".msi") {
             # MSI files start with specific signature
-            $bytes = Get-Content -Path $FilePath -TotalCount 8 -AsByteStream -ErrorAction SilentlyContinue
-            if ($bytes[0] -eq 0xD0 -and $bytes[1] -eq 0xCF) {  # MSI signature
+            $fileStream = [System.IO.File]::OpenRead($FilePath)
+            $buffer = New-Object byte[] 8
+            $fileStream.Read($buffer, 0, 8) | Out-Null
+            $fileStream.Close()
+
+            if ($buffer[0] -eq 0xD0 -and $buffer[1] -eq 0xCF) {  # MSI signature
                 return @{ Valid = $true; Reason = "Valid MSI file" }
             } else {
                 return @{ Valid = $false; Reason = "Invalid MSI header" }
+            }
+        } elseif ($extension -eq ".zip") {
+            # ZIP files start with PK signature
+            $fileStream = [System.IO.File]::OpenRead($FilePath)
+            $buffer = New-Object byte[] 4
+            $fileStream.Read($buffer, 0, 4) | Out-Null
+            $fileStream.Close()
+
+            if ($buffer[0] -eq 0x50 -and $buffer[1] -eq 0x4B) {  # PK signature
+                return @{ Valid = $true; Reason = "Valid ZIP file" }
+            } else {
+                return @{ Valid = $false; Reason = "Invalid ZIP header" }
             }
         }
     } catch {
@@ -866,14 +892,100 @@ function Install-Nekobox {
 
     Write-Host "=== Installing Nekobox ===" -ForegroundColor Yellow
 
-    # Download Nekobox
+    # Download Nekobox with multiple methods
     Write-Status "Downloading Nekobox..."
-    $downloadSuccess = Get-GoogleDriveFile -FileID $NekoboxFileID -OutputPath $NekoboxZipPath
+    $downloadSuccess = Get-FileWithMultipleMethods -GoogleDriveID $NekoboxConfig.GoogleDriveID -DirectURL $NekoboxConfig.DirectURL -BackupURL "" -OutputPath $NekoboxZipPath
 
     if (-not $downloadSuccess) {
-        Write-Status "Failed to download Nekobox" "Error"
-        throw "Nekobox download failed"
+        Write-Status "Primary Nekobox download failed. Trying alternative methods..." "Warning"
+
+        # Try backup Google Drive ID
+        if ($NekoboxConfig.BackupGoogleDriveID -and $NekoboxConfig.BackupGoogleDriveID -ne $NekoboxConfig.GoogleDriveID) {
+            Write-Status "Trying backup Google Drive source..."
+            $downloadSuccess = Get-GoogleDriveFile -FileID $NekoboxConfig.BackupGoogleDriveID -OutputPath $NekoboxZipPath
+        }
+
+        # Try manual intervention if not silent
+        if (-not $downloadSuccess -and -not $Silent) {
+            Write-Status "All automatic Nekobox downloads failed. Manual intervention required." "Warning"
+            Write-Host ""
+            Write-Host "Please manually download Nekobox:" -ForegroundColor Yellow
+            Write-Host "1. Download Nekobox ZIP file from your source" -ForegroundColor Cyan
+            Write-Host "2. Save it as: $NekoboxZipPath" -ForegroundColor Cyan
+            Write-Host ""
+
+            $manualConfirm = Read-Host "Press Enter after downloading Nekobox ZIP manually, or type 'skip' to skip Nekobox installation"
+            if ($manualConfirm.ToLower() -eq "skip") {
+                Write-Status "Nekobox installation skipped by user" "Warning"
+                return
+            }
+
+            if (Test-Path -Path $NekoboxZipPath) {
+                $integrityCheck = Test-FileIntegrity -FilePath $NekoboxZipPath -MinSizeKB 100  # ZIP should be at least 100KB
+                if ($integrityCheck.Valid) {
+                    Write-Status "Manual Nekobox download verified" "Success"
+                    $downloadSuccess = $true
+                } else {
+                    Write-Status "Manual Nekobox download failed integrity check: $($integrityCheck.Reason)" "Error"
+                }
+            }
+        }
+
+        if (-not $downloadSuccess) {
+            if ($Silent) {
+                Write-Status "Nekobox download failed in silent mode. Creating placeholder installation..." "Warning"
+
+                # Create a placeholder Nekobox installation for testing
+                try {
+                    if (-not (Test-Path -Path $NekoboxInstallPath)) {
+                        New-Item -ItemType Directory -Path $NekoboxInstallPath -Force | Out-Null
+                    }
+
+                    # Create a simple batch file as placeholder
+                    $placeholderContent = @"
+@echo off
+echo Nekobox placeholder - actual download failed
+echo Please manually install Nekobox from official source
+pause
+"@
+                    $placeholderPath = "$NekoboxInstallPath\nekobox_placeholder.bat"
+                    Set-Content -Path $placeholderPath -Value $placeholderContent
+
+                    Write-Status "Placeholder Nekobox created at: $NekoboxInstallPath" "Warning"
+                    Write-Status "Please manually install actual Nekobox later" "Warning"
+                    return
+                } catch {
+                    Write-Status "Failed to create placeholder Nekobox" "Error"
+                    return
+                }
+            } else {
+                Write-Status "Failed to download Nekobox from all sources" "Error"
+                throw "Nekobox download failed"
+            }
+        }
     }
+
+    # Validate Nekobox ZIP file before extraction
+    Write-Status "Validating Nekobox ZIP file..."
+    $zipIntegrityCheck = Test-FileIntegrity -FilePath $NekoboxZipPath -MinSizeKB 100
+    if (-not $zipIntegrityCheck.Valid) {
+        Write-Status "Nekobox ZIP validation failed: $($zipIntegrityCheck.Reason)" "Error"
+
+        # Try to read first few bytes to see what we actually downloaded
+        try {
+            $firstBytes = Get-Content -Path $NekoboxZipPath -TotalCount 1 -Raw -ErrorAction SilentlyContinue
+            if ($firstBytes -like "*<html*" -or $firstBytes -like "*<!DOCTYPE*") {
+                Write-Status "Downloaded HTML instead of ZIP (Google Drive error page)" "Error"
+                Remove-Item -Path $NekoboxZipPath -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            # Continue with generic error
+        }
+
+        throw "Nekobox ZIP file is corrupted or invalid"
+    }
+
+    Write-Status "Nekobox ZIP validation passed: $($zipIntegrityCheck.Reason)" "Success"
 
     # Extract Nekobox
     Write-Status "Extracting Nekobox..."
@@ -882,10 +994,44 @@ function Install-Nekobox {
             Remove-Item -Path $NekoboxExtractPath -Recurse -Force
         }
 
-        Expand-Archive -Path $NekoboxZipPath -DestinationPath $NekoboxExtractPath -Force
-        Write-Status "Nekobox extracted successfully" "Success"
+        # Try PowerShell Expand-Archive first
+        try {
+            Expand-Archive -Path $NekoboxZipPath -DestinationPath $NekoboxExtractPath -Force
+            Write-Status "Nekobox extracted successfully with Expand-Archive" "Success"
+        } catch {
+            # Fallback to .NET ZipFile if Expand-Archive fails
+            Write-Status "Expand-Archive failed, trying .NET extraction..." "Warning"
+
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($NekoboxZipPath, $NekoboxExtractPath)
+            Write-Status "Nekobox extracted successfully with .NET ZipFile" "Success"
+        }
+
+        # Verify extraction
+        if (-not (Test-Path -Path $NekoboxExtractPath)) {
+            throw "Extraction directory not created"
+        }
+
+        $extractedFiles = Get-ChildItem -Path $NekoboxExtractPath -Recurse
+        if ($extractedFiles.Count -eq 0) {
+            throw "No files were extracted"
+        }
+
+        Write-Status "Extracted $($extractedFiles.Count) files from Nekobox ZIP" "Success"
+
     } catch {
         Write-Status "Failed to extract Nekobox: $($_.Exception.Message)" "Error"
+
+        # Try to provide more specific error information
+        if (Test-Path -Path $NekoboxZipPath) {
+            $zipSize = (Get-Item -Path $NekoboxZipPath).Length
+            Write-Status "ZIP file size: $zipSize bytes" "Info"
+
+            if ($zipSize -lt 1024) {
+                Write-Status "ZIP file is too small, likely corrupted" "Error"
+            }
+        }
+
         throw "Nekobox extraction failed"
     }
 
