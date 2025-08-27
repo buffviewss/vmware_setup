@@ -659,7 +659,7 @@ function Block-ChromeUpdates {
     Write-Log "Blocking Chrome updates comprehensively..." "Info"
 
     try {
-        # Enhanced update blocking with additional registry keys
+        # Complete update blocking with all known registry keys
         $updatePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
         if (-not (Test-Path $updatePolicyPath)) {
             New-Item -Path $updatePolicyPath -Force | Out-Null
@@ -675,6 +675,8 @@ function Block-ChromeUpdates {
             "DisableAutoUpdateChecksCheckboxValue" = 1
             "UpdateCheckSuppressedStartHour" = 0
             "UpdateCheckSuppressedDurationMin" = 1440
+            "UpdatePolicy" = 0
+            "InstallPolicy" = 0
         }
 
         foreach ($policy in $updatePolicies.GetEnumerator()) {
@@ -692,14 +694,15 @@ function Block-ChromeUpdates {
             "AutofillCreditCardEnabled" = 0; "SyncDisabled" = 1; "SigninAllowed" = 0
             "CloudPrintProxyEnabled" = 0; "MetricsReportingEnabled" = 0; "SearchSuggestEnabled" = 0
             "AlternateErrorPagesEnabled" = 0; "SpellCheckServiceEnabled" = 0; "SafeBrowsingEnabled" = 0
-            "AutoplayPolicy" = 2; "ComponentUpdatesEnabled" = 0
+            "AutoplayPolicy" = 2; "ComponentUpdatesEnabled" = 0; "AutoUpdateCheckPeriodMinutes" = 0
+            "UpdateCheckSuppressedStartHour" = 0; "UpdateCheckSuppressedDurationMin" = 1440
         }
 
         foreach ($policy in $chromePolicies.GetEnumerator()) {
             New-ItemProperty -Path $chromePolicyPath -Name $policy.Key -Value $policy.Value -PropertyType DWord -Force | Out-Null
         }
 
-        # Block Chrome update URLs via hosts file
+        # Block Chrome update URLs via hosts file - comprehensive list
         try {
             $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
             $hostsContent = Get-Content $hostsPath -ErrorAction SilentlyContinue
@@ -707,7 +710,12 @@ function Block-ChromeUpdates {
                 "update.googleapis.com",
                 "clients2.google.com",
                 "clients4.google.com",
-                "edgedl.me.gvt1.com"
+                "clients5.google.com",
+                "clients6.google.com",
+                "edgedl.me.gvt1.com",
+                "dl.google.com",
+                "cache.pack.google.com",
+                "chrome.google.com"
             )
 
             $hostsUpdated = $false
@@ -776,6 +784,39 @@ function Block-ChromeUpdates {
             } catch {
                 # Task might not exist
             }
+        }
+
+        # Additional registry keys to completely disable update checking UI
+        try {
+            $chromeClientStatePath = "HKLM:\SOFTWARE\Google\Update\ClientState\{8A69D345-D564-463C-AFF1-A69D9E530F96}"
+            if (-not (Test-Path $chromeClientStatePath)) {
+                New-Item -Path $chromeClientStatePath -Force | Out-Null
+            }
+
+            $clientStatePolicies = @{
+                "UpdatePolicy" = 0
+                "UpdateCheckSuppressedStartHour" = 0
+                "UpdateCheckSuppressedDurationMin" = 1440
+                "IsUpdateDisabled" = 1
+            }
+
+            foreach ($policy in $clientStatePolicies.GetEnumerator()) {
+                New-ItemProperty -Path $chromeClientStatePath -Name $policy.Key -Value $policy.Value -PropertyType DWord -Force | Out-Null
+            }
+
+            # Also set in WOW6432Node for 32-bit compatibility
+            $chromeClientStatePathWow = "HKLM:\SOFTWARE\WOW6432Node\Google\Update\ClientState\{8A69D345-D564-463C-AFF1-A69D9E530F96}"
+            if (-not (Test-Path $chromeClientStatePathWow)) {
+                New-Item -Path $chromeClientStatePathWow -Force | Out-Null
+            }
+
+            foreach ($policy in $clientStatePolicies.GetEnumerator()) {
+                New-ItemProperty -Path $chromeClientStatePathWow -Name $policy.Key -Value $policy.Value -PropertyType DWord -Force | Out-Null
+            }
+
+            Write-Log "Chrome update client state configured to disable all update checks" "Success"
+        } catch {
+            Write-Log "Could not configure Chrome client state: $($_.Exception.Message)" "Warning"
         }
 
         Write-Log "Chrome updates blocked comprehensively with enhanced protection" "Success"
@@ -1016,14 +1057,30 @@ function Install-Nekobox {
 
         # Set proper permissions for the entire Nekobox directory
         try {
+            # Set permissions on main directory
             $acl = Get-Acl $script:Apps.Nekobox.InstallPath
             $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
             $acl.SetAccessRule($accessRule)
-            Set-Acl -Path $script:Apps.Nekobox.InstallPath -AclObject $acl -Recurse
-            Write-Log "Set full permissions for Nekobox directory" "Success"
+            Set-Acl -Path $script:Apps.Nekobox.InstallPath -AclObject $acl
+
+            # Set permissions on all files and subdirectories manually (PowerShell 5.1 doesn't support -Recurse)
+            Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Recurse | ForEach-Object {
+                try {
+                    $itemAcl = Get-Acl $_.FullName
+                    $itemAcl.SetAccessRule($accessRule)
+                    Set-Acl -Path $_.FullName -AclObject $itemAcl
+                } catch {
+                    # Continue if individual file fails
+                }
+            }
+
+            Write-Log "Set full permissions for Nekobox directory and files" "Success"
         } catch {
             Write-Log "Could not set directory permissions: $($_.Exception.Message)" "Warning"
         }
+
+        # Create launcher script to ensure Nekobox runs properly
+        New-NekoboxLauncher
 
         Add-NekoboxDesktopShortcut
         Add-NekoboxToTaskbar
@@ -1045,15 +1102,64 @@ function Install-Nekobox {
     }
 }
 
-function Add-NekoboxDesktopShortcut {
-    Write-Log "Creating Nekobox desktop shortcut..." "Info"
+function New-NekoboxLauncher {
+    Write-Log "Creating Nekobox launcher script..." "Info"
 
     try {
         $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
         if (-not (Test-Path $nekoboxExe)) {
             $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
             if ($exeFiles.Count -gt 0) {
-                $nekoboxExe = $exeFiles[0].FullName
+                $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
+                $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
+            } else {
+                Write-Log "No Nekobox executable found for launcher creation" "Warning"
+                return
+            }
+        }
+
+        # Create PowerShell launcher script
+        $launcherPath = Join-Path $script:Apps.Nekobox.InstallPath "Launch_Nekobox.ps1"
+        $launcherContent = @"
+# Nekobox Launcher Script
+# Ensures proper execution with correct working directory and permissions
+
+Set-Location '$($script:Apps.Nekobox.InstallPath)'
+Start-Process -FilePath '$nekoboxExe' -WorkingDirectory '$($script:Apps.Nekobox.InstallPath)' -WindowStyle Normal
+"@
+
+        $launcherContent | Out-File -FilePath $launcherPath -Encoding UTF8
+
+        # Create batch file launcher for easier execution
+        $batchLauncherPath = Join-Path $script:Apps.Nekobox.InstallPath "Launch_Nekobox.bat"
+        $batchContent = @"
+@echo off
+cd /d "$($script:Apps.Nekobox.InstallPath)"
+start "" "$nekoboxExe"
+"@
+
+        $batchContent | Out-File -FilePath $batchLauncherPath -Encoding ASCII
+
+        Write-Log "Nekobox launcher scripts created" "Success"
+
+    } catch {
+        Write-Log "Failed to create Nekobox launcher: $($_.Exception.Message)" "Warning"
+    }
+}
+
+function Add-NekoboxDesktopShortcut {
+    Write-Log "Creating Nekobox desktop shortcut..." "Info"
+
+    try {
+        # Use batch launcher for better compatibility
+        $batchLauncherPath = Join-Path $script:Apps.Nekobox.InstallPath "Launch_Nekobox.bat"
+        $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+
+        if (-not (Test-Path $nekoboxExe)) {
+            $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
+            if ($exeFiles.Count -gt 0) {
+                $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
+                $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
             } else {
                 Write-Log "Nekobox executable not found for desktop shortcut" "Warning"
                 return
@@ -1065,9 +1171,18 @@ function Add-NekoboxDesktopShortcut {
 
         $wshShell = New-Object -ComObject WScript.Shell
         $shortcut = $wshShell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $nekoboxExe
-        $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-        $shortcut.Description = "Nekobox VPN Client"
+
+        # Use batch launcher if available, otherwise direct executable
+        if (Test-Path $batchLauncherPath) {
+            $shortcut.TargetPath = $batchLauncherPath
+            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+            $shortcut.Description = "Nekobox VPN Client (Enhanced Launcher)"
+        } else {
+            $shortcut.TargetPath = $nekoboxExe
+            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+            $shortcut.Description = "Nekobox VPN Client"
+        }
+
         $shortcut.IconLocation = $nekoboxExe
         $shortcut.Save()
 
