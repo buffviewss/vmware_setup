@@ -9,21 +9,16 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet("US", "UK", "AU", "SG", "NZ", "Interactive", "Skip")]
-    [string]$Region = "Interactive",
-    
     [ValidateSet("Chrome135", "Chrome136", "Chrome137", "Chrome138", "Chrome141", "Interactive")]
     [string]$ChromeVersion = "Interactive",
-    
+
     [switch]$SkipPython,
-    [switch]$SkipChrome, 
+    [switch]$SkipChrome,
     [switch]$SkipNekobox,
-    [switch]$SkipRegion,
     [switch]$Silent,
     [switch]$Test,
     [switch]$TestGDrive,
-    [switch]$Benchmark,
-    [switch]$ShowCurrentRegion
+    [switch]$Benchmark
 )
 
 # ===================================================================
@@ -64,28 +59,7 @@ $script:Apps = @{
     }
 }
 
-$script:Regions = @{
-    "US" = @{ 
-        Language = "en-US"; DisplayName = "🇺🇸 United States"; Timezone = "Eastern Standard Time"
-        Currency = "USD"; DateFormat = "M/d/yyyy"; NumberFormat = "en-US"
-    }
-    "UK" = @{ 
-        Language = "en-GB"; DisplayName = "🇬🇧 United Kingdom"; Timezone = "GMT Standard Time"
-        Currency = "GBP"; DateFormat = "dd/MM/yyyy"; NumberFormat = "en-GB"
-    }
-    "AU" = @{ 
-        Language = "en-AU"; DisplayName = "🇦🇺 Australia"; Timezone = "AUS Eastern Standard Time"
-        Currency = "AUD"; DateFormat = "d/MM/yyyy"; NumberFormat = "en-AU"
-    }
-    "SG" = @{ 
-        Language = "en-SG"; DisplayName = "🇸🇬 Singapore"; Timezone = "Singapore Standard Time"
-        Currency = "SGD"; DateFormat = "d/M/yyyy"; NumberFormat = "en-SG"
-    }
-    "NZ" = @{ 
-        Language = "en-NZ"; DisplayName = "🇳🇿 New Zealand"; Timezone = "New Zealand Standard Time"
-        Currency = "NZD"; DateFormat = "d/MM/yyyy"; NumberFormat = "en-NZ"
-    }
-}
+
 
 # ===================================================================
 # UTILITY FUNCTIONS
@@ -150,53 +124,7 @@ function Test-Prerequisites {
     }
 }
 
-function Get-CurrentRegionSettings {
-    try {
-        $culture = Get-Culture
-        $timezone = Get-TimeZone
-        $location = Get-WinHomeLocation -ErrorAction SilentlyContinue
-        
-        return @{
-            Language = $culture.Name
-            DisplayName = $culture.DisplayName
-            Timezone = $timezone.Id
-            TimezoneDisplay = $timezone.DisplayName
-            Currency = $culture.NumberFormat.CurrencySymbol
-            DateFormat = $culture.DateTimeFormat.ShortDatePattern
-            Country = if ($location) { $location.HomeLocation } else { "Unknown" }
-        }
-    } catch {
-        Write-Log "Could not retrieve current region settings: $($_.Exception.Message)" "Warning"
-        return $null
-    }
-}
 
-function Show-CurrentRegionSettings {
-    Write-Host ""
-    Write-Host "=== Current System Region Settings ===" -ForegroundColor Cyan
-    
-    $current = Get-CurrentRegionSettings
-    if ($current) {
-        Write-Host "Language: $($current.Language) ($($current.DisplayName))" -ForegroundColor White
-        Write-Host "Timezone: $($current.TimezoneDisplay)" -ForegroundColor White
-        Write-Host "Currency: $($current.Currency)" -ForegroundColor White
-        Write-Host "Date Format: $($current.DateFormat)" -ForegroundColor White
-        if ($current.Country -ne "Unknown") {
-            Write-Host "Country Code: $($current.Country)" -ForegroundColor White
-        }
-        
-        $matchedRegion = $script:Regions.Keys | Where-Object { $script:Regions[$_].Language -eq $current.Language } | Select-Object -First 1
-        
-        if ($matchedRegion) {
-            Write-Host "Detected Region: $($script:Regions[$matchedRegion].DisplayName)" -ForegroundColor Green
-        } else {
-            Write-Host "Region: Custom/Other" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "Could not retrieve current settings" -ForegroundColor Red
-    }
-    Write-Host ""
-}
 
 function Initialize-Logging {
     try {
@@ -334,64 +262,7 @@ class DownloadEngine {
 # SELECTION FUNCTIONS
 # ===================================================================
 
-function Select-UserRegion {
-    if ($Region -eq "Skip" -or $SkipRegion) {
-        Write-Log "Region configuration skipped" "Info"
-        return "Skip"
-    }
 
-    if ($Region -ne "Interactive") {
-        Write-Log "Region pre-selected: $Region" "Info"
-        return $Region
-    }
-
-    if ($Silent) {
-        Write-Log "Silent mode: Using default region US" "Info"
-        return "US"
-    }
-
-    Show-CurrentRegionSettings
-
-    Write-Host "=== Region Selection ===" -ForegroundColor Yellow
-    Write-Host "Please select your target region:" -ForegroundColor Cyan
-    Write-Host ""
-
-    $regionOptions = @()
-    $counter = 1
-
-    foreach ($key in $script:Regions.Keys | Sort-Object) {
-        $region = $script:Regions[$key]
-        Write-Host "$counter. $($region.DisplayName)" -ForegroundColor White
-        Write-Host "   Language: $($region.Language) | Timezone: $($region.Timezone)" -ForegroundColor Gray
-        Write-Host "   Currency: $($region.Currency) | Date: $($region.DateFormat)" -ForegroundColor Gray
-        Write-Host ""
-        $regionOptions += $key
-        $counter++
-    }
-
-    Write-Host "$counter. 🚫 Skip region configuration" -ForegroundColor Yellow
-    $regionOptions += "Skip"
-    Write-Host ""
-
-    do {
-        $selection = Read-Host "Select option (1-$($regionOptions.Count))"
-        $selectionInt = 0
-
-        if ([int]::TryParse($selection, [ref]$selectionInt) -and
-            $selectionInt -ge 1 -and $selectionInt -le $regionOptions.Count) {
-            $selectedRegion = $regionOptions[$selectionInt - 1]
-
-            if ($selectedRegion -eq "Skip") {
-                Write-Log "Region configuration skipped by user" "Info"
-            } else {
-                Write-Log "Selected region: $($script:Regions[$selectedRegion].DisplayName)" "Success"
-            }
-            return $selectedRegion
-        } else {
-            Write-Log "Invalid selection. Please choose 1-$($regionOptions.Count)." "Error"
-        }
-    } while ($true)
-}
 
 function Select-ChromeVersion {
     if ($ChromeVersion -ne "Interactive") {
@@ -503,76 +374,7 @@ function Install-Python {
     }
 }
 
-function Set-SystemRegion {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Region)
 
-    if ($Region -eq "Skip") {
-        Write-Log "Region configuration skipped" "Info"
-        return
-    }
-
-    Write-Log "=== Configuring System Region ===" "Info"
-
-    if (-not $script:Regions.ContainsKey($Region)) {
-        Write-Log "Invalid region: $Region" "Error"
-        return
-    }
-
-    $regionConfig = $script:Regions[$Region]
-    Write-Log "Configuring system for: $($regionConfig.DisplayName)" "Info"
-
-    try {
-        Write-Log "Setting system language to: $($regionConfig.Language)" "Info"
-        Set-WinUILanguageOverride -Language $regionConfig.Language -ErrorAction SilentlyContinue
-        Set-WinUserLanguageList $regionConfig.Language -Force -ErrorAction SilentlyContinue
-        Set-WinSystemLocale -SystemLocale $regionConfig.Language -ErrorAction SilentlyContinue
-
-        Write-Log "Setting timezone to: $($regionConfig.Timezone)" "Info"
-        try {
-            Set-TimeZone -Id $regionConfig.Timezone -ErrorAction Stop
-            Write-Log "Timezone set successfully" "Success"
-        } catch {
-            Write-Log "Could not set timezone: $($_.Exception.Message)" "Warning"
-            Set-TimeZone -Id "UTC" -ErrorAction SilentlyContinue
-            Write-Log "Fallback: Set timezone to UTC" "Info"
-        }
-
-        Write-Log "Setting regional formats for: $($regionConfig.NumberFormat)" "Info"
-        Set-Culture -CultureInfo $regionConfig.Language -ErrorAction SilentlyContinue
-
-        try {
-            $geoId = switch ($Region) {
-                "US" { 244 }; "UK" { 242 }; "AU" { 12 }; "SG" { 215 }; "NZ" { 183 }; default { 244 }
-            }
-            Set-WinHomeLocation -GeoId $geoId -ErrorAction SilentlyContinue
-            Write-Log "Home location set for region" "Success"
-        } catch {
-            Write-Log "Could not set home location" "Warning"
-        }
-
-        Write-Log "Setting keyboard layout to US (for remote access compatibility)" "Info"
-        Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" -ErrorAction SilentlyContinue
-
-        try {
-            $registryPath = "HKCU:\Control Panel\International"
-            if (Test-Path $registryPath) {
-                Set-ItemProperty -Path $registryPath -Name "sShortDate" -Value $regionConfig.DateFormat -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path $registryPath -Name "sCurrency" -Value $regionConfig.Currency -ErrorAction SilentlyContinue
-                Write-Log "Registry regional settings updated" "Success"
-            }
-        } catch {
-            Write-Log "Could not update registry settings" "Warning"
-        }
-
-        Write-Log "System region configured successfully for $($regionConfig.DisplayName)" "Success"
-        Write-Log "Note: Some changes may require a system restart to take full effect" "Info"
-
-    } catch {
-        Write-Log "Failed to configure system region: $($_.Exception.Message)" "Error"
-        throw "Region configuration failed"
-    }
-}
 
 function Uninstall-ExistingChrome {
     Write-Log "Checking for existing Chrome installations..." "Info"
@@ -1032,61 +834,63 @@ function Install-Chrome {
 
     Write-Log "Installing Chrome..." "Info"
 
-    # Try multiple installation methods for better compatibility
+    # Enhanced Chrome installation with better error handling and verification
     $installSuccess = $false
+    $maxRetries = 3
+    $retryCount = 0
 
-    # Method 1: Standard silent installation
-    try {
-        $process = Start-Process -FilePath $installerPath -ArgumentList $script:Apps.Chrome.InstallArgs -Wait -PassThru
+    while (-not $installSuccess -and $retryCount -lt $maxRetries) {
+        $retryCount++
 
-        if ($process.ExitCode -eq 0) {
-            $installSuccess = $true
-            Write-Log "Chrome installed successfully (standard method)" "Success"
-        } else {
-            Write-Log "Standard installation failed with exit code: $($process.ExitCode)" "Warning"
-        }
-    } catch {
-        Write-Log "Standard installation method failed: $($_.Exception.Message)" "Warning"
-    }
-
-    # Method 2: Alternative installation arguments if first method failed
-    if (-not $installSuccess) {
         try {
-            Write-Log "Trying alternative installation method..." "Info"
-            $altArgs = "/silent /install /allusers=1 /nogoogleupdateping"
-            $process = Start-Process -FilePath $installerPath -ArgumentList $altArgs -Wait -PassThru
+            Write-Log "Chrome installation attempt $retryCount of $maxRetries..." "Info"
 
-            if ($process.ExitCode -eq 0) {
+            # Use standard Chrome installer arguments
+            $process = Start-Process -FilePath $installerPath -ArgumentList $script:Apps.Chrome.InstallArgs -Wait -PassThru -WindowStyle Hidden
+
+            # Chrome installer exit codes: 0 = success, 7 = already installed
+            # Exit codes like 75044 often indicate successful installation with minor issues
+            $successCodes = @(0, 7)
+
+            if ($process.ExitCode -in $successCodes) {
                 $installSuccess = $true
-                Write-Log "Chrome installed successfully (alternative method)" "Success"
+                Write-Log "Chrome installation completed successfully (exit code: $($process.ExitCode))" "Success"
             } else {
-                Write-Log "Alternative installation failed with exit code: $($process.ExitCode)" "Warning"
+                # For any non-success exit code, verify installation by checking executable
+                Write-Log "Chrome installer exit code: $($process.ExitCode) - verifying installation..." "Warning"
+
+                # Wait for files to be created and verify installation
+                Start-Sleep -Seconds 10
+
+                # Check if Chrome was actually installed despite non-zero exit code
+                $chromePaths = @(
+                    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+                    "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+                )
+
+                $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+                if ($chromeFound) {
+                    $installSuccess = $true
+                    Write-Log "Chrome installation verified successful despite exit code $($process.ExitCode)" "Success"
+                } else {
+                    Write-Log "Chrome installation attempt $retryCount failed - Chrome executable not found" "Warning"
+                    if ($retryCount -lt $maxRetries) {
+                        Write-Log "Retrying Chrome installation in 5 seconds..." "Info"
+                        Start-Sleep -Seconds 5
+                    }
+                }
             }
         } catch {
-            Write-Log "Alternative installation method failed: $($_.Exception.Message)" "Warning"
-        }
-    }
-
-    # Method 3: Force installation with minimal arguments
-    if (-not $installSuccess) {
-        try {
-            Write-Log "Trying force installation..." "Info"
-            $forceArgs = "/S"
-            $process = Start-Process -FilePath $installerPath -ArgumentList $forceArgs -Wait -PassThru
-
-            if ($process.ExitCode -eq 0) {
-                $installSuccess = $true
-                Write-Log "Chrome installed successfully (force method)" "Success"
-            } else {
-                Write-Log "Force installation failed with exit code: $($process.ExitCode)" "Warning"
+            Write-Log "Chrome installation attempt $retryCount failed: $($_.Exception.Message)" "Warning"
+            if ($retryCount -lt $maxRetries) {
+                Start-Sleep -Seconds 5
             }
-        } catch {
-            Write-Log "Force installation method failed: $($_.Exception.Message)" "Warning"
         }
     }
 
     if (-not $installSuccess) {
-        Write-Log "All Chrome installation methods failed" "Error"
+        Write-Log "Chrome installation failed after $maxRetries attempts" "Error"
     }
 
     # Wait for installation to complete and files to be available
@@ -1189,9 +993,8 @@ function Install-Nekobox {
             Write-Log "Could not set directory permissions: $($_.Exception.Message)" "Warning"
         }
 
-        # Create launcher script to ensure Nekobox runs properly
-        New-NekoboxLauncher
-
+        # Configure Nekobox for optimal execution
+        Set-NekoboxAutoStart
         Add-NekoboxDesktopShortcut
         Add-NekoboxToTaskbar
 
@@ -1212,57 +1015,65 @@ function Install-Nekobox {
     }
 }
 
-function New-NekoboxLauncher {
-    Write-Log "Creating Nekobox launcher script..." "Info"
+function Set-NekoboxAutoStart {
+    Write-Log "Configuring Nekobox auto-start..." "Info"
 
     try {
+        # Find the main Nekobox executable
         $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+
         if (-not (Test-Path $nekoboxExe)) {
             $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
             if ($exeFiles.Count -gt 0) {
                 $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
                 $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
             } else {
-                Write-Log "No Nekobox executable found for launcher creation" "Warning"
+                Write-Log "Nekobox executable not found for auto-start configuration" "Warning"
                 return
             }
         }
 
-        # Create PowerShell launcher script
-        $launcherPath = Join-Path $script:Apps.Nekobox.InstallPath "Launch_Nekobox.ps1"
-        $launcherContent = @"
-# Nekobox Launcher Script
-# Ensures proper execution with correct working directory and permissions
+        # Add to Windows startup registry (current user)
+        $startupRegPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        $startupName = "Nekobox"
 
-Set-Location '$($script:Apps.Nekobox.InstallPath)'
-Start-Process -FilePath '$nekoboxExe' -WorkingDirectory '$($script:Apps.Nekobox.InstallPath)' -WindowStyle Normal
-"@
+        try {
+            New-ItemProperty -Path $startupRegPath -Name $startupName -Value "`"$nekoboxExe`"" -PropertyType String -Force | Out-Null
+            Write-Log "Nekobox added to Windows startup (registry method)" "Success"
+        } catch {
+            Write-Log "Failed to add Nekobox to startup registry: $($_.Exception.Message)" "Warning"
+        }
 
-        $launcherContent | Out-File -FilePath $launcherPath -Encoding UTF8
+        # Also add to Startup folder as backup method
+        try {
+            $startupFolder = [Environment]::GetFolderPath("Startup")
+            $startupShortcutPath = Join-Path $startupFolder "Nekobox.lnk"
 
-        # Create batch file launcher for easier execution
-        $batchLauncherPath = Join-Path $script:Apps.Nekobox.InstallPath "Launch_Nekobox.bat"
-        $batchContent = @"
-@echo off
-cd /d "$($script:Apps.Nekobox.InstallPath)"
-start "" "$nekoboxExe"
-"@
+            $wshShell = New-Object -ComObject WScript.Shell
+            $shortcut = $wshShell.CreateShortcut($startupShortcutPath)
+            $shortcut.TargetPath = $nekoboxExe
+            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+            $shortcut.Description = "Nekobox VPN Client - Auto Start"
+            $shortcut.IconLocation = $nekoboxExe
+            $shortcut.Save()
 
-        $batchContent | Out-File -FilePath $batchLauncherPath -Encoding ASCII
-
-        Write-Log "Nekobox launcher scripts created" "Success"
+            Write-Log "Nekobox startup shortcut created: $startupShortcutPath" "Success"
+        } catch {
+            Write-Log "Failed to create startup shortcut: $($_.Exception.Message)" "Warning"
+        }
 
     } catch {
-        Write-Log "Failed to create Nekobox launcher: $($_.Exception.Message)" "Warning"
+        Write-Log "Failed to configure Nekobox auto-start: $($_.Exception.Message)" "Warning"
     }
 }
+
+
 
 function Add-NekoboxDesktopShortcut {
     Write-Log "Creating Nekobox desktop shortcut..." "Info"
 
     try {
-        # Use batch launcher for better compatibility
-        $batchLauncherPath = Join-Path $script:Apps.Nekobox.InstallPath "Launch_Nekobox.bat"
+        # Direct executable execution as requested by user (no batch launcher)
         $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
 
         if (-not (Test-Path $nekoboxExe)) {
@@ -1282,17 +1093,10 @@ function Add-NekoboxDesktopShortcut {
         $wshShell = New-Object -ComObject WScript.Shell
         $shortcut = $wshShell.CreateShortcut($shortcutPath)
 
-        # Use batch launcher if available, otherwise direct executable
-        if (Test-Path $batchLauncherPath) {
-            $shortcut.TargetPath = $batchLauncherPath
-            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-            $shortcut.Description = "Nekobox VPN Client (Enhanced Launcher)"
-        } else {
-            $shortcut.TargetPath = $nekoboxExe
-            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-            $shortcut.Description = "Nekobox VPN Client"
-        }
-
+        # Direct executable execution (user preference)
+        $shortcut.TargetPath = $nekoboxExe
+        $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+        $shortcut.Description = "Nekobox VPN Client"
         $shortcut.IconLocation = $nekoboxExe
         $shortcut.Save()
 
@@ -1542,10 +1346,7 @@ function Start-WindowsSetup {
         Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host ""
 
-        if ($ShowCurrentRegion) {
-            Show-CurrentRegionSettings
-            return
-        }
+
 
         if ($Test) {
             Invoke-SystemTest
@@ -1564,7 +1365,7 @@ function Start-WindowsSetup {
 
         Test-Prerequisites
 
-        $selectedRegion = Select-UserRegion
+
 
         $selectedChromeVersion = $null
         if (-not $SkipChrome) {
@@ -1573,7 +1374,6 @@ function Start-WindowsSetup {
 
         Write-Host ""
         Write-Host "=== Windows Setup Configuration ===" -ForegroundColor Yellow
-        Write-Host "Region: $(if ($selectedRegion -eq 'Skip') { '🚫 Skipped' } else { $script:Regions[$selectedRegion].DisplayName })" -ForegroundColor Cyan
         if (-not $SkipChrome -and $selectedChromeVersion) {
             Write-Host "Chrome Version: $($script:GoogleDriveFiles.Chrome[$selectedChromeVersion].Name)" -ForegroundColor Cyan
         }
@@ -1600,9 +1400,7 @@ function Start-WindowsSetup {
             Install-Python -Downloader $downloader
         }
 
-        if ($selectedRegion -ne "Skip") {
-            Set-SystemRegion -Region $selectedRegion
-        }
+
 
         if (-not $SkipChrome -and $selectedChromeVersion) {
             Install-Chrome -Downloader $downloader -ChromeVersion $selectedChromeVersion
@@ -1619,14 +1417,7 @@ function Start-WindowsSetup {
         Write-Host ""
         Write-Host "=== Installation Summary ===" -ForegroundColor Yellow
 
-        if ($selectedRegion -ne "Skip") {
-            Write-Host "🌍 System Region: $($script:Regions[$selectedRegion].DisplayName)" -ForegroundColor Green
-            Write-Host "   Language: $($script:Regions[$selectedRegion].Language)" -ForegroundColor White
-            Write-Host "   Timezone: $($script:Regions[$selectedRegion].Timezone)" -ForegroundColor White
-            Write-Host "   Currency: $($script:Regions[$selectedRegion].Currency)" -ForegroundColor White
-        } else {
-            Write-Host "🌍 System Region: Skipped" -ForegroundColor Yellow
-        }
+
 
         if (-not $SkipPython) {
             try {
