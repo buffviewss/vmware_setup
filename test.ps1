@@ -34,7 +34,7 @@ Write-Host ""
 # Chrome versions with multiple download sources
 $ChromeVersions = @{
     1 = @{
-        Name = "google-chrome-135-0-7049-96"
+        Name = "Chrome Latest Stable"
         GoogleDriveID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H"
         DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
@@ -51,23 +51,18 @@ $ChromeVersions = @{
         DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
     }
-
-    
     4 = @{
-        Name = "google-chrome-138-0-7194-0"
+        Name = "Chrome Enterprise MSI"
         GoogleDriveID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda"
-        DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
-        BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+        DirectURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+        BackupURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
     }
-
-    
     5 = @{
-        Name = "google-chrome-141-0-7340-0"
-        GoogleDriveID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6"
-        DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
-        BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+        Name = "Chrome Beta Channel"
+        GoogleDriveID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7"
+        DirectURL = "https://dl.google.com/chrome/install/beta/chrome_installer.exe"
+        BackupURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
     }
-   
 }
 
 # Nekobox configuration with multiple sources
