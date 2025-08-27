@@ -283,9 +283,9 @@ class DownloadEngine {
         
         $pythonPath = $outputPath.Replace('\', '/')
         $methods = @(
-            "import gdown; gdown.download(id=`'$fileId`', output=`'$pythonPath`', quiet=False, fuzzy=True)",
-            "import gdown; gdown.download(`'https://drive.google.com/uc?id=$fileId`', `'$pythonPath`', quiet=False)",
-            "import gdown; gdown.download(`'$fileId`', `'$pythonPath`', quiet=False)"
+            "import gdown; gdown.download(id='$fileId', output='$pythonPath', quiet=False, fuzzy=True)",
+            "import gdown; gdown.download('https://drive.google.com/uc?id=$fileId', '$pythonPath', quiet=False)",
+            "import gdown; gdown.download('$fileId', '$pythonPath', quiet=False)"
         )
         
         foreach ($method in $methods) {
@@ -293,7 +293,8 @@ class DownloadEngine {
                 Write-Log "Trying gdown method..." "Info"
 
                 # Use Start-Process with timeout to prevent hanging
-                $null = Start-Process -FilePath "python" -ArgumentList "-c", $method -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gdown_output.txt" -RedirectStandardError "$env:TEMP\gdown_error.txt"
+                $pythonCode = $method
+                $null = Start-Process -FilePath "python" -ArgumentList "-c", $pythonCode -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gdown_output.txt" -RedirectStandardError "$env:TEMP\gdown_error.txt"
 
                 # Check if download completed successfully
                 if ((Test-Path -Path $outputPath) -and (Get-Item -Path $outputPath).Length -gt 10240) {
