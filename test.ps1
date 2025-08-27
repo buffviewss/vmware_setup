@@ -830,12 +830,68 @@ function Add-ChromeToTaskbar {
     Write-Log "Pinning Chrome to taskbar..." "Info"
 
     try {
+        # Enhanced Chrome executable detection with multiple methods
         $chromePaths = @(
             "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-            "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+            "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
+            "$env:LocalAppData\Google\Chrome\Application\chrome.exe",
+            "$env:UserProfile\AppData\Local\Google\Chrome\Application\chrome.exe"
         )
 
         $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+        # If not found in standard paths, try registry detection
+        if (-not $chromeExe) {
+            try {
+                $registryPaths = @(
+                    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+                )
+
+                foreach ($regPath in $registryPaths) {
+                    if (Test-Path $regPath) {
+                        $regChromePath = (Get-ItemProperty -Path $regPath -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
+                        if ($regChromePath -and (Test-Path $regChromePath)) {
+                            $chromeExe = $regChromePath
+                            break
+                        }
+                    }
+                }
+            } catch {
+                # Continue to search method
+            }
+        }
+
+        # If still not found, search in Google directories
+        if (-not $chromeExe) {
+            try {
+                $googleDirs = @(
+                    "$env:ProgramFiles\Google",
+                    "$env:ProgramFiles(x86)\Google",
+                    "$env:LocalAppData\Google"
+                )
+
+                foreach ($dir in $googleDirs) {
+                    if (Test-Path $dir) {
+                        $foundExe = Get-ChildItem -Path $dir -Filter "chrome.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                        if ($foundExe) {
+                            $chromeExe = $foundExe.FullName
+                            break
+                        }
+                    }
+                }
+            } catch {
+                # Continue
+            }
+        }
+
+        # Final wait and retry for fresh installations
+        if (-not $chromeExe) {
+            Write-Log "Chrome executable not immediately found, waiting for installation to complete..." "Info"
+            Start-Sleep -Seconds 10
+
+            $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+        }
 
         if (-not $chromeExe) {
             Write-Log "Chrome executable not found for taskbar pinning" "Warning"
@@ -976,11 +1032,65 @@ function Install-Chrome {
 
     Write-Log "Installing Chrome..." "Info"
 
-    $process = Start-Process -FilePath $installerPath -ArgumentList $script:Apps.Chrome.InstallArgs -Wait -PassThru
+    # Try multiple installation methods for better compatibility
+    $installSuccess = $false
 
-    if ($process.ExitCode -ne 0) {
-        Write-Log "Chrome installation may have issues (exit code: $($process.ExitCode))" "Warning"
+    # Method 1: Standard silent installation
+    try {
+        $process = Start-Process -FilePath $installerPath -ArgumentList $script:Apps.Chrome.InstallArgs -Wait -PassThru
+
+        if ($process.ExitCode -eq 0) {
+            $installSuccess = $true
+            Write-Log "Chrome installed successfully (standard method)" "Success"
+        } else {
+            Write-Log "Standard installation failed with exit code: $($process.ExitCode)" "Warning"
+        }
+    } catch {
+        Write-Log "Standard installation method failed: $($_.Exception.Message)" "Warning"
     }
+
+    # Method 2: Alternative installation arguments if first method failed
+    if (-not $installSuccess) {
+        try {
+            Write-Log "Trying alternative installation method..." "Info"
+            $altArgs = "/silent /install /allusers=1 /nogoogleupdateping"
+            $process = Start-Process -FilePath $installerPath -ArgumentList $altArgs -Wait -PassThru
+
+            if ($process.ExitCode -eq 0) {
+                $installSuccess = $true
+                Write-Log "Chrome installed successfully (alternative method)" "Success"
+            } else {
+                Write-Log "Alternative installation failed with exit code: $($process.ExitCode)" "Warning"
+            }
+        } catch {
+            Write-Log "Alternative installation method failed: $($_.Exception.Message)" "Warning"
+        }
+    }
+
+    # Method 3: Force installation with minimal arguments
+    if (-not $installSuccess) {
+        try {
+            Write-Log "Trying force installation..." "Info"
+            $forceArgs = "/S"
+            $process = Start-Process -FilePath $installerPath -ArgumentList $forceArgs -Wait -PassThru
+
+            if ($process.ExitCode -eq 0) {
+                $installSuccess = $true
+                Write-Log "Chrome installed successfully (force method)" "Success"
+            } else {
+                Write-Log "Force installation failed with exit code: $($process.ExitCode)" "Warning"
+            }
+        } catch {
+            Write-Log "Force installation method failed: $($_.Exception.Message)" "Warning"
+        }
+    }
+
+    if (-not $installSuccess) {
+        Write-Log "All Chrome installation methods failed" "Error"
+    }
+
+    # Wait for installation to complete and files to be available
+    Start-Sleep -Seconds 5
 
     Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
 
@@ -1553,12 +1663,59 @@ function Start-WindowsSetup {
                 if ($chromeInstalled) { break }
             }
 
-            # Also check for Chrome executable directly
+            # Enhanced Chrome executable detection with multiple methods
             $chromePaths = @(
                 "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-                "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+                "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
+                "$env:LocalAppData\Google\Chrome\Application\chrome.exe",
+                "$env:UserProfile\AppData\Local\Google\Chrome\Application\chrome.exe"
             )
             $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+            # If not found in standard paths, try registry detection
+            if (-not $chromeFound) {
+                try {
+                    $registryPaths = @(
+                        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+                    )
+
+                    foreach ($regPath in $registryPaths) {
+                        if (Test-Path $regPath) {
+                            $regChromePath = (Get-ItemProperty -Path $regPath -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
+                            if ($regChromePath -and (Test-Path $regChromePath)) {
+                                $chromeFound = $regChromePath
+                                break
+                            }
+                        }
+                    }
+                } catch {
+                    # Continue to search method
+                }
+            }
+
+            # If still not found, search in Google directories
+            if (-not $chromeFound) {
+                try {
+                    $googleDirs = @(
+                        "$env:ProgramFiles\Google",
+                        "$env:ProgramFiles(x86)\Google",
+                        "$env:LocalAppData\Google"
+                    )
+
+                    foreach ($dir in $googleDirs) {
+                        if (Test-Path $dir) {
+                            $foundExe = Get-ChildItem -Path $dir -Filter "chrome.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                            if ($foundExe) {
+                                $chromeFound = $foundExe.FullName
+                                break
+                            }
+                        }
+                    }
+                } catch {
+                    # Continue
+                }
+            }
 
             if ($chromeInstalled -or $chromeFound) {
                 $version = if ($chromeInstalled) { $chromeInstalled.DisplayVersion } else { "Installed" }
