@@ -52,7 +52,7 @@ $ChromeVersions = @{
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
     }
 
-     }
+    
     4 = @{
         Name = "google-chrome-138-0-7194-0"
         GoogleDriveID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda"
@@ -60,7 +60,7 @@ $ChromeVersions = @{
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
     }
 
-     }
+    
     5 = @{
         Name = "google-chrome-141-0-7340-0"
         GoogleDriveID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6"
