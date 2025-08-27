@@ -6,6 +6,11 @@
 
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
+# Force TLS 1.2 và bypass certificate validation
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+[Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+$ProgressPreference = 'SilentlyContinue'
+
 
 [CmdletBinding()]
 param(
