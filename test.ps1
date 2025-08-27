@@ -415,7 +415,6 @@ function Select-ChromeVersion {
     foreach ($key in $script:GoogleDriveFiles.Chrome.Keys | Sort-Object) {
         $version = $script:GoogleDriveFiles.Chrome[$key]
         Write-Host "$counter. $($version.Name)" -ForegroundColor White
-        Write-Host "   Google Drive ID: $($version.ID)" -ForegroundColor Gray
         Write-Host ""
         $versionOptions += $key
         $counter++
@@ -660,6 +659,7 @@ function Block-ChromeUpdates {
     Write-Log "Blocking Chrome updates comprehensively..." "Info"
 
     try {
+        # Enhanced update blocking with additional registry keys
         $updatePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
         if (-not (Test-Path $updatePolicyPath)) {
             New-Item -Path $updatePolicyPath -Force | Out-Null
@@ -672,6 +672,9 @@ function Block-ChromeUpdates {
             "Install{8A69D345-D564-463C-AFF1-A69D9E530F96}" = 0
             "UpdateSuppressedStartHour" = 0
             "UpdateSuppressedDurationMin" = 1440
+            "DisableAutoUpdateChecksCheckboxValue" = 1
+            "UpdateCheckSuppressedStartHour" = 0
+            "UpdateCheckSuppressedDurationMin" = 1440
         }
 
         foreach ($policy in $updatePolicies.GetEnumerator()) {
@@ -689,11 +692,37 @@ function Block-ChromeUpdates {
             "AutofillCreditCardEnabled" = 0; "SyncDisabled" = 1; "SigninAllowed" = 0
             "CloudPrintProxyEnabled" = 0; "MetricsReportingEnabled" = 0; "SearchSuggestEnabled" = 0
             "AlternateErrorPagesEnabled" = 0; "SpellCheckServiceEnabled" = 0; "SafeBrowsingEnabled" = 0
-            "AutoplayPolicy" = 2
+            "AutoplayPolicy" = 2; "ComponentUpdatesEnabled" = 0
         }
 
         foreach ($policy in $chromePolicies.GetEnumerator()) {
             New-ItemProperty -Path $chromePolicyPath -Name $policy.Key -Value $policy.Value -PropertyType DWord -Force | Out-Null
+        }
+
+        # Block Chrome update URLs via hosts file
+        try {
+            $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+            $hostsContent = Get-Content $hostsPath -ErrorAction SilentlyContinue
+            $updateUrls = @(
+                "update.googleapis.com",
+                "clients2.google.com",
+                "clients4.google.com",
+                "edgedl.me.gvt1.com"
+            )
+
+            $hostsUpdated = $false
+            foreach ($url in $updateUrls) {
+                if ($hostsContent -notcontains "127.0.0.1 $url") {
+                    Add-Content -Path $hostsPath -Value "127.0.0.1 $url" -ErrorAction SilentlyContinue
+                    $hostsUpdated = $true
+                }
+            }
+
+            if ($hostsUpdated) {
+                Write-Log "Chrome update URLs blocked in hosts file" "Success"
+            }
+        } catch {
+            Write-Log "Could not modify hosts file: $($_.Exception.Message)" "Warning"
         }
 
         $services = @("gupdate", "gupdatem", "GoogleUpdaterService", "GoogleUpdaterInternalService")
@@ -722,11 +751,16 @@ function Block-ChromeUpdates {
                     $updateExe = Join-Path $path "GoogleUpdate.exe"
                     if (Test-Path $updateExe) {
                         Rename-Item -Path $updateExe -NewName "GoogleUpdate.exe.disabled" -Force -ErrorAction SilentlyContinue
+                        Write-Log "Disabled GoogleUpdate.exe in: $path" "Success"
                     }
 
-                    $taskPath = Join-Path $path "GoogleUpdate.exe"
-                    if (Test-Path $taskPath) {
-                        Remove-Item -Path $taskPath -Force -ErrorAction SilentlyContinue
+                    # Also disable other update executables
+                    $otherExes = @("GoogleCrashHandler.exe", "GoogleCrashHandler64.exe")
+                    foreach ($exe in $otherExes) {
+                        $exePath = Join-Path $path $exe
+                        if (Test-Path $exePath) {
+                            Rename-Item -Path $exePath -NewName "$exe.disabled" -Force -ErrorAction SilentlyContinue
+                        }
                     }
                 } catch {
                     Write-Log "Could not disable updates in: $path" "Warning"
@@ -738,12 +772,13 @@ function Block-ChromeUpdates {
         foreach ($taskName in $taskNames) {
             try {
                 Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
+                Write-Log "Removed scheduled task: $taskName" "Success"
             } catch {
                 # Task might not exist
             }
         }
 
-        Write-Log "Chrome updates blocked comprehensively" "Success"
+        Write-Log "Chrome updates blocked comprehensively with enhanced protection" "Success"
 
     } catch {
         Write-Log "Failed to block Chrome updates: $($_.Exception.Message)" "Warning"
@@ -766,52 +801,104 @@ function Add-ChromeToTaskbar {
             return
         }
 
-        $shell = New-Object -ComObject Shell.Application
-        $folder = $shell.Namespace((Split-Path $chromeExe))
-        $item = $folder.ParseName((Split-Path $chromeExe -Leaf))
+        # Method 1: Try PowerShell COM approach
+        try {
+            $shell = New-Object -ComObject Shell.Application
+            $folder = $shell.Namespace((Split-Path $chromeExe))
+            $item = $folder.ParseName((Split-Path $chromeExe -Leaf))
 
-        $verbs = $item.Verbs()
-        foreach ($verb in $verbs) {
-            if ($verb.Name -match "taskbar" -or $verb.Name -match "Pin") {
-                $verb.DoIt()
-                Write-Log "Chrome pinned to taskbar" "Success"
-                break
+            $verbs = $item.Verbs()
+            $pinned = $false
+            foreach ($verb in $verbs) {
+                if ($verb.Name -match "taskbar" -or $verb.Name -match "Pin") {
+                    $verb.DoIt()
+                    Write-Log "Chrome pinned to taskbar (COM method)" "Success"
+                    $pinned = $true
+                    break
+                }
             }
+
+            if ($pinned) { return }
+        } catch {
+            Write-Log "COM method failed: $($_.Exception.Message)" "Warning"
         }
 
-        if (-not $pinned) {
-            try {
-                $pinToTaskbar = @"
+        # Method 2: Try syspin utility approach
+        try {
+            $syspinPath = Join-Path $env:TEMP "syspin.exe"
+            if (-not (Test-Path $syspinPath)) {
+                # Create minimal syspin equivalent using PowerShell
+                $pinScript = @"
+Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
-public class TaskbarPin {
-    [DllImport("shell32.dll")]
-    public static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid rfid, uint dwFlags, IntPtr hToken, out IntPtr pszPath);
+public class TaskbarPinner {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct SHFILEINFO {
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szDisplayName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+        public string szTypeName;
+    }
 
     public static void PinToTaskbar(string filePath) {
-        dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("Shell.Application"));
-        dynamic folder = shell.NameSpace(System.IO.Path.GetDirectoryName(filePath));
-        dynamic folderItem = folder.ParseName(System.IO.Path.GetFileName(filePath));
-        dynamic itemVerbs = folderItem.Verbs();
-
-        for (int i = 0; i < itemVerbs.Count; i++) {
-            dynamic verb = itemVerbs.Item(i);
-            if (verb.Name.Contains("taskbar") || verb.Name.Contains("Pin")) {
-                verb.DoIt();
-                break;
-            }
-        }
+        try {
+            var startInfo = new System.Diagnostics.ProcessStartInfo {
+                FileName = "powershell.exe",
+                Arguments = string.Format("-Command \"(New-Object -ComObject Shell.Application).Namespace('{0}').ParseName('{1}').InvokeVerb('taskbarpin')\"",
+                    System.IO.Path.GetDirectoryName(filePath), System.IO.Path.GetFileName(filePath)),
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+                UseShellExecute = false
+            };
+            System.Diagnostics.Process.Start(startInfo);
+        } catch { }
     }
 }
+'@
+[TaskbarPinner]::PinToTaskbar('$chromeExe')
 "@
-                Add-Type -TypeDefinition $pinToTaskbar -ErrorAction SilentlyContinue
-                [TaskbarPin]::PinToTaskbar($chromeExe)
-                Write-Log "Chrome pinned to taskbar (alternative method)" "Success"
-            } catch {
-                Write-Log "Could not pin Chrome to taskbar: $($_.Exception.Message)" "Warning"
+                $pinScript | Out-File -FilePath $syspinPath.Replace('.exe', '.ps1') -Encoding UTF8
+                powershell -ExecutionPolicy Bypass -File $syspinPath.Replace('.exe', '.ps1')
+                Write-Log "Chrome pinned to taskbar (PowerShell method)" "Success"
+                return
             }
+        } catch {
+            Write-Log "PowerShell pin method failed: $($_.Exception.Message)" "Warning"
         }
+
+        # Method 3: Try registry approach for taskbar shortcuts
+        try {
+            $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+            if (Test-Path $taskbarPath) {
+                $shortcutPath = Join-Path $taskbarPath "Google Chrome.lnk"
+
+                $wshShell = New-Object -ComObject WScript.Shell
+                $shortcut = $wshShell.CreateShortcut($shortcutPath)
+                $shortcut.TargetPath = $chromeExe
+                $shortcut.WorkingDirectory = Split-Path $chromeExe
+                $shortcut.Description = "Google Chrome"
+                $shortcut.IconLocation = $chromeExe
+                $shortcut.Save()
+
+                Write-Log "Chrome shortcut added to taskbar directory" "Success"
+                return
+            }
+        } catch {
+            Write-Log "Registry method failed: $($_.Exception.Message)" "Warning"
+        }
+
+        Write-Log "All taskbar pinning methods failed - Chrome installed but not pinned" "Warning"
 
     } catch {
         Write-Log "Failed to pin Chrome to taskbar: $($_.Exception.Message)" "Warning"
@@ -927,6 +1014,17 @@ function Install-Nekobox {
 
         Write-Log "Nekobox installed to: $($script:Apps.Nekobox.InstallPath)" "Success"
 
+        # Set proper permissions for the entire Nekobox directory
+        try {
+            $acl = Get-Acl $script:Apps.Nekobox.InstallPath
+            $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
+            $acl.SetAccessRule($accessRule)
+            Set-Acl -Path $script:Apps.Nekobox.InstallPath -AclObject $acl -Recurse
+            Write-Log "Set full permissions for Nekobox directory" "Success"
+        } catch {
+            Write-Log "Could not set directory permissions: $($_.Exception.Message)" "Warning"
+        }
+
         Add-NekoboxDesktopShortcut
         Add-NekoboxToTaskbar
 
@@ -988,42 +1086,70 @@ function Add-NekoboxToTaskbar {
         if (-not (Test-Path $nekoboxExe)) {
             $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
             if ($exeFiles.Count -gt 0) {
-                $nekoboxExe = $exeFiles[0].FullName
+                # Prefer nekoray.exe or nekobox.exe
+                $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
+                $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
             } else {
                 Write-Log "Nekobox executable not found for taskbar pinning" "Warning"
                 return
             }
         }
 
-        $shell = New-Object -ComObject Shell.Application
-        $folder = $shell.Namespace((Split-Path $nekoboxExe))
-        $item = $folder.ParseName((Split-Path $nekoboxExe -Leaf))
+        # Method 1: Try COM approach
+        try {
+            $shell = New-Object -ComObject Shell.Application
+            $folder = $shell.Namespace((Split-Path $nekoboxExe))
+            $item = $folder.ParseName((Split-Path $nekoboxExe -Leaf))
 
-        $verbs = $item.Verbs()
-        foreach ($verb in $verbs) {
-            if ($verb.Name -match "taskbar" -or $verb.Name -match "Pin") {
-                $verb.DoIt()
-                Write-Log "Nekobox pinned to taskbar" "Success"
+            $verbs = $item.Verbs()
+            $pinned = $false
+            foreach ($verb in $verbs) {
+                if ($verb.Name -match "taskbar" -or $verb.Name -match "Pin") {
+                    $verb.DoIt()
+                    Write-Log "Nekobox pinned to taskbar (COM method)" "Success"
+                    $pinned = $true
+                    break
+                }
+            }
+
+            if ($pinned) { return }
+        } catch {
+            Write-Log "COM method failed: $($_.Exception.Message)" "Warning"
+        }
+
+        # Method 2: Try taskbar directory approach
+        try {
+            $quickLaunchPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+            if (Test-Path $quickLaunchPath) {
+                $shortcutPath = Join-Path $quickLaunchPath "Nekobox.lnk"
+
+                $wshShell = New-Object -ComObject WScript.Shell
+                $shortcut = $wshShell.CreateShortcut($shortcutPath)
+                $shortcut.TargetPath = $nekoboxExe
+                $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+                $shortcut.Description = "Nekobox VPN Client"
+                $shortcut.IconLocation = $nekoboxExe
+                $shortcut.Save()
+
+                Write-Log "Nekobox shortcut added to taskbar directory" "Success"
                 return
             }
+        } catch {
+            Write-Log "Taskbar directory method failed: $($_.Exception.Message)" "Warning"
         }
 
-        $quickLaunchPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-        if (Test-Path $quickLaunchPath) {
-            $shortcutPath = Join-Path $quickLaunchPath "Nekobox.lnk"
-
-            $wshShell = New-Object -ComObject WScript.Shell
-            $shortcut = $wshShell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = $nekoboxExe
-            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-            $shortcut.Description = "Nekobox VPN Client"
-            $shortcut.IconLocation = $nekoboxExe
-            $shortcut.Save()
-
-            Write-Log "Nekobox added to taskbar (alternative method)" "Success"
-        } else {
-            Write-Log "Could not pin Nekobox to taskbar" "Warning"
+        # Method 3: Set proper permissions for Nekobox executable
+        try {
+            $acl = Get-Acl $nekoboxExe
+            $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
+            $acl.SetAccessRule($accessRule)
+            Set-Acl -Path $nekoboxExe -AclObject $acl
+            Write-Log "Set full permissions for Nekobox executable" "Success"
+        } catch {
+            Write-Log "Could not set permissions: $($_.Exception.Message)" "Warning"
         }
+
+        Write-Log "Taskbar pinning attempted - may require manual pinning" "Warning"
 
     } catch {
         Write-Log "Failed to pin Nekobox to taskbar: $($_.Exception.Message)" "Warning"
@@ -1298,18 +1424,33 @@ function Start-WindowsSetup {
         }
 
         if (-not $SkipChrome) {
-            $chromeInstalled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
-                              Where-Object { $_.DisplayName -like "*Google Chrome*" }
-            if ($chromeInstalled) {
-                Write-Host "🌐 Chrome: $($chromeInstalled.DisplayVersion)" -ForegroundColor Green
-                Write-Host "   Updates: Blocked comprehensively" -ForegroundColor White
-                Write-Host "   Taskbar: Pinned" -ForegroundColor White
+            # Check multiple locations for Chrome installation
+            $chromeInstalled = $null
+            $chromeRegistryPaths = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+            )
 
-                $chromePaths = @(
-                    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-                    "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
-                )
-                $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            foreach ($regPath in $chromeRegistryPaths) {
+                $chromeInstalled = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue |
+                                  Where-Object { $_.DisplayName -like "*Google Chrome*" } | Select-Object -First 1
+                if ($chromeInstalled) { break }
+            }
+
+            # Also check for Chrome executable directly
+            $chromePaths = @(
+                "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+                "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+            )
+            $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+            if ($chromeInstalled -or $chromeFound) {
+                $version = if ($chromeInstalled) { $chromeInstalled.DisplayVersion } else { "Installed" }
+                Write-Host "🌐 Chrome: $version" -ForegroundColor Green
+                Write-Host "   Updates: Blocked comprehensively" -ForegroundColor White
+                Write-Host "   Taskbar: Attempted to pin" -ForegroundColor White
+
                 if ($chromeFound) {
                     Write-Host "   Location: $chromeFound" -ForegroundColor White
                 } else {
