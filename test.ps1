@@ -141,6 +141,30 @@ function Get-ChromeInstallationInfo {
     return $null
 }
 
+function New-ShellShortcut {
+    param(
+        [string]$ShortcutPath,
+        [string]$TargetPath,
+        [string]$WorkingDirectory = "",
+        [string]$Description = "",
+        [string]$IconLocation = ""
+    )
+
+    try {
+        $wshShell = New-Object -ComObject WScript.Shell
+        $shortcut = $wshShell.CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = $TargetPath
+        if ($WorkingDirectory) { $shortcut.WorkingDirectory = $WorkingDirectory }
+        if ($Description) { $shortcut.Description = $Description }
+        if ($IconLocation) { $shortcut.IconLocation = $IconLocation }
+        $shortcut.Save()
+        return $true
+    } catch {
+        Write-Log "Failed to create shortcut: $($_.Exception.Message)" "Warning"
+        return $false
+    }
+}
+
 function Write-Log {
     [CmdletBinding()]
     param(
@@ -259,9 +283,9 @@ class DownloadEngine {
         
         $pythonPath = $outputPath.Replace('\', '/')
         $methods = @(
-            "import gdown; gdown.download(id='$fileId', output='$pythonPath', quiet=False, fuzzy=True)",
-            "import gdown; gdown.download('https://drive.google.com/uc?id=$fileId', '$pythonPath', quiet=False)",
-            "import gdown; gdown.download('$fileId', '$pythonPath', quiet=False)"
+            "import gdown; gdown.download(id=`'$fileId`', output=`'$pythonPath`', quiet=False, fuzzy=True)",
+            "import gdown; gdown.download(`'https://drive.google.com/uc?id=$fileId`', `'$pythonPath`', quiet=False)",
+            "import gdown; gdown.download(`'$fileId`', `'$pythonPath`', quiet=False)"
         )
         
         foreach ($method in $methods) {
@@ -825,13 +849,7 @@ public class TaskbarPinner {
             if (Test-Path $taskbarPath) {
                 $shortcutPath = Join-Path $taskbarPath "Google Chrome.lnk"
 
-                $wshShell = New-Object -ComObject WScript.Shell
-                $shortcut = $wshShell.CreateShortcut($shortcutPath)
-                $shortcut.TargetPath = $chromeExe
-                $shortcut.WorkingDirectory = Split-Path $chromeExe
-                $shortcut.Description = "Google Chrome"
-                $shortcut.IconLocation = $chromeExe
-                $shortcut.Save()
+                New-ShellShortcut -ShortcutPath $shortcutPath -TargetPath $chromeExe -WorkingDirectory (Split-Path $chromeExe) -Description "Google Chrome" -IconLocation $chromeExe | Out-Null
 
                 Write-Log "Chrome shortcut added to taskbar directory" "Success"
                 return
@@ -1081,13 +1099,7 @@ function Set-NekoboxAutoStart {
             $startupFolder = [Environment]::GetFolderPath("Startup")
             $startupShortcutPath = Join-Path $startupFolder "Nekobox.lnk"
 
-            $wshShell = New-Object -ComObject WScript.Shell
-            $shortcut = $wshShell.CreateShortcut($startupShortcutPath)
-            $shortcut.TargetPath = $nekoboxExe
-            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-            $shortcut.Description = "Nekobox VPN Client - Auto Start"
-            $shortcut.IconLocation = $nekoboxExe
-            $shortcut.Save()
+            New-ShellShortcut -ShortcutPath $startupShortcutPath -TargetPath $nekoboxExe -WorkingDirectory $script:Apps.Nekobox.InstallPath -Description "Nekobox VPN Client - Auto Start" -IconLocation $nekoboxExe | Out-Null
 
             Write-Log "Nekobox startup shortcut created: $startupShortcutPath" "Success"
         } catch {
@@ -1116,15 +1128,7 @@ function Add-NekoboxDesktopShortcut {
         $desktopPath = $script:Config.DesktopPath
         $shortcutPath = Join-Path $desktopPath "Nekobox.lnk"
 
-        $wshShell = New-Object -ComObject WScript.Shell
-        $shortcut = $wshShell.CreateShortcut($shortcutPath)
-
-        # Direct executable execution (user preference)
-        $shortcut.TargetPath = $nekoboxExe
-        $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-        $shortcut.Description = "Nekobox VPN Client"
-        $shortcut.IconLocation = $nekoboxExe
-        $shortcut.Save()
+        New-ShellShortcut -ShortcutPath $shortcutPath -TargetPath $nekoboxExe -WorkingDirectory $script:Apps.Nekobox.InstallPath -Description "Nekobox VPN Client" -IconLocation $nekoboxExe | Out-Null
 
         Write-Log "Desktop shortcut created: $shortcutPath" "Success"
 
@@ -1172,13 +1176,7 @@ function Add-NekoboxToTaskbar {
             if (Test-Path $quickLaunchPath) {
                 $shortcutPath = Join-Path $quickLaunchPath "Nekobox.lnk"
 
-                $wshShell = New-Object -ComObject WScript.Shell
-                $shortcut = $wshShell.CreateShortcut($shortcutPath)
-                $shortcut.TargetPath = $nekoboxExe
-                $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
-                $shortcut.Description = "Nekobox VPN Client"
-                $shortcut.IconLocation = $nekoboxExe
-                $shortcut.Save()
+                New-ShellShortcut -ShortcutPath $shortcutPath -TargetPath $nekoboxExe -WorkingDirectory $script:Apps.Nekobox.InstallPath -Description "Nekobox VPN Client" -IconLocation $nekoboxExe | Out-Null
 
                 Write-Log "Nekobox shortcut added to taskbar directory" "Success"
                 return
