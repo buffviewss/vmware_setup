@@ -4,8 +4,30 @@
 # Compatible with PowerShell 5.x and Windows 10/11
 # ===================================================================
 
+# ===================================================================
+# GOOGLE DRIVE FILE IDs CONFIGURATION
+# Update these IDs if files change or become inaccessible
+# ===================================================================
+
+# Chrome installers - Update these Google Drive file IDs as needed
+$CHROME_GDRIVE_IDS = @{
+    "Chrome 135-0-7049-96"    = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H"
+    "Chrome 136.0.7103.114"   = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc"
+    "Chrome 137.0.7151.120"   = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6"
+    "Chrome 138-0-7194-0"     = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda"
+    "Chrome 141-0-7340-0"     = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7"
+}
+
+# Nekobox VPN - Update this Google Drive file ID as needed
+$NEKOBOX_GDRIVE_ID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"
+
+# ===================================================================
+# SCRIPT PARAMETERS
+# ===================================================================
+
 param(
-    [string]$Region = "US",
+    [ValidateSet("US", "UK", "AU", "SG", "NZ", "Interactive")]
+    [string]$Region = "Interactive",
     [switch]$SkipPython,
     [switch]$SkipChrome,
     [switch]$SkipNekobox,
@@ -31,46 +53,48 @@ Write-Host ""
 # CONFIGURATION
 # ===================================================================
 
-# Chrome versions with multiple download sources
+# Chrome versions configuration using global IDs
 $ChromeVersions = @{
     1 = @{
         Name = "Chrome Latest Stable"
-        GoogleDriveID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H"
+        GoogleDriveID = $CHROME_GDRIVE_IDS["Chrome Latest Stable"]
         DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
     }
     2 = @{
         Name = "Chrome 136.0.7103.114"
-        GoogleDriveID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc"
+        GoogleDriveID = $CHROME_GDRIVE_IDS["Chrome 136.0.7103.114"]
         DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
     }
     3 = @{
         Name = "Chrome 137.0.7151.120"
-        GoogleDriveID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6"
+        GoogleDriveID = $CHROME_GDRIVE_IDS["Chrome 137.0.7151.120"]
         DirectURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
         BackupURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
     }
     4 = @{
         Name = "Chrome Enterprise MSI"
-        GoogleDriveID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda"
+        GoogleDriveID = $CHROME_GDRIVE_IDS["Chrome Enterprise MSI"]
         DirectURL = "https://dl.google.com/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
         BackupURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
     }
     5 = @{
         Name = "Chrome Beta Channel"
-        GoogleDriveID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7"
+        GoogleDriveID = $CHROME_GDRIVE_IDS["Chrome Beta Channel"]
         DirectURL = "https://dl.google.com/chrome/install/beta/chrome_installer.exe"
         BackupURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
     }
 }
 
-# Nekobox configuration with multiple sources
+# Nekobox configuration using global ID
 $NekoboxConfig = @{
-    GoogleDriveID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"
-    BackupGoogleDriveID = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"  # Same for now, can be updated
+    GoogleDriveID = $NEKOBOX_GDRIVE_ID
+    BackupGoogleDriveID = ""  # Can be updated with working backup ID
     DirectURL = ""  # Add direct download URL if available
-    GitHubURL = ""  # Add GitHub release URL if available
+    GitHubURL = "https://github.com/MatsuriDayo/nekoray/releases/latest/download/nekoray-3.26-2023-12-09-windows64.zip"
+    AlternativeURL = ""  # Alternative download source
+    SkipOnFail = $true  # Skip Nekobox if all downloads fail (instead of throwing error)
 }
 
 # Paths
@@ -79,6 +103,54 @@ $ChromeInstallerPath = "$DownloadsPath\chrome_installer.exe"
 $NekoboxZipPath = "$DownloadsPath\nekobox_installer.zip"
 $NekoboxExtractPath = "$DownloadsPath\nekobox"
 $NekoboxInstallPath = "$env:ProgramFiles\Nekobox"
+
+# ===================================================================
+# REGION SELECTION FUNCTIONS
+# ===================================================================
+
+function Select-Region {
+    if ($Region -ne "Interactive") {
+        Write-Status "Region pre-selected: $Region" "Info"
+        return $Region
+    }
+
+    if ($Silent) {
+        Write-Status "Silent mode: Using default region US" "Info"
+        return "US"
+    }
+
+    Write-Host ""
+    Write-Host "=== Region Selection ===" -ForegroundColor Yellow
+    Write-Host "Please select your region/country:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "1. 🇺🇸 United States (US)" -ForegroundColor White
+    Write-Host "2. 🇬🇧 United Kingdom (UK)" -ForegroundColor White
+    Write-Host "3. 🇦🇺 Australia (AU)" -ForegroundColor White
+    Write-Host "4. 🇸🇬 Singapore (SG)" -ForegroundColor White
+    Write-Host "5. 🇳🇿 New Zealand (NZ)" -ForegroundColor White
+    Write-Host ""
+
+    $regionMap = @{
+        1 = "US"
+        2 = "UK"
+        3 = "AU"
+        4 = "SG"
+        5 = "NZ"
+    }
+
+    do {
+        $selection = Read-Host "Select region (1-5)"
+        $selectionInt = 0
+
+        if ([int]::TryParse($selection, [ref]$selectionInt) -and $regionMap.ContainsKey($selectionInt)) {
+            $selectedRegion = $regionMap[$selectionInt]
+            Write-Status "Selected region: $selectedRegion" "Success"
+            return $selectedRegion
+        } else {
+            Write-Status "Invalid selection. Please choose 1-5." "Error"
+        }
+    } while ($true)
+}
 
 # ===================================================================
 # UTILITY FUNCTIONS
@@ -492,14 +564,126 @@ function Get-FileWithMultipleMethods {
     return $false
 }
 
-# Simplified Google Drive download for Nekobox
+# Enhanced Google Drive download with better error handling
 function Get-GoogleDriveFile {
     param(
         [string]$FileID,
         [string]$OutputPath
     )
 
-    return Get-FileWithMultipleMethods -GoogleDriveID $FileID -OutputPath $OutputPath
+    Write-Status "Downloading from Google Drive ID: $FileID"
+
+    # Create output directory if needed
+    $outputDir = Split-Path -Path $OutputPath -Parent
+    if (-not (Test-Path -Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+    }
+
+    $downloadSuccess = $false
+
+    # Method 1: Try gdown with direct download
+    try {
+        Write-Status "Trying gdown method..."
+        python -c "import gdown" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            # Use gdown with fuzzy matching for large files
+            python -c "import gdown; gdown.download(id='$FileID', output='$OutputPath', quiet=False, fuzzy=True)" 2>&1 | Out-Null
+
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -Path $OutputPath)) {
+                $fileSize = (Get-Item -Path $OutputPath).Length
+                if ($fileSize -gt 1024) {
+                    Write-Status "gdown download successful: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
+                    $downloadSuccess = $true
+                }
+            }
+        }
+    } catch {
+        Write-Status "gdown method failed: $($_.Exception.Message)" "Warning"
+    }
+
+    # Method 2: Try direct Google Drive URL with WebClient
+    if (-not $downloadSuccess) {
+        try {
+            Write-Status "Trying direct Google Drive download..."
+
+            # Remove existing file if corrupted
+            if (Test-Path -Path $OutputPath) {
+                Remove-Item -Path $OutputPath -Force
+            }
+
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+            # Try multiple Google Drive URL formats
+            $driveUrls = @(
+                "https://drive.google.com/uc?export=download&id=$FileID",
+                "https://drive.google.com/file/d/$FileID/view?usp=sharing",
+                "https://drive.google.com/uc?id=$FileID&export=download",
+                "https://docs.google.com/uc?export=download&id=$FileID"
+            )
+
+            foreach ($url in $driveUrls) {
+                try {
+                    Write-Status "Trying URL: $url"
+                    $webClient.DownloadFile($url, $OutputPath)
+
+                    if (Test-Path -Path $OutputPath) {
+                        $fileSize = (Get-Item -Path $OutputPath).Length
+
+                        # Check if we got HTML instead of the file
+                        $firstBytes = Get-Content -Path $OutputPath -TotalCount 1 -Raw -ErrorAction SilentlyContinue
+                        if ($firstBytes -like "*<html*" -or $firstBytes -like "*<!DOCTYPE*") {
+                            Write-Status "Got HTML page instead of file" "Warning"
+                            Remove-Item -Path $OutputPath -Force
+                            continue
+                        }
+
+                        if ($fileSize -gt 10240) {  # At least 10KB
+                            Write-Status "Direct download successful: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
+                            $downloadSuccess = $true
+                            break
+                        } else {
+                            Write-Status "Downloaded file too small: $fileSize bytes" "Warning"
+                            Remove-Item -Path $OutputPath -Force
+                        }
+                    }
+                } catch {
+                    Write-Status "URL failed: $($_.Exception.Message)" "Warning"
+                    continue
+                }
+            }
+
+            $webClient.Dispose()
+
+        } catch {
+            Write-Status "Direct download failed: $($_.Exception.Message)" "Warning"
+        }
+    }
+
+    # Method 3: Try curl if available
+    if (-not $downloadSuccess) {
+        try {
+            Write-Status "Trying curl method..."
+            # Check if real curl.exe exists (not PowerShell alias)
+            $curlPath = Get-Command curl.exe -ErrorAction SilentlyContinue
+            if ($curlPath) {
+                $curlUrl = "https://drive.google.com/uc?export=download&id=$FileID"
+                & curl.exe -L "$curlUrl" -o "$OutputPath" --fail --silent --show-error 2>&1 | Out-Null
+
+                if ($LASTEXITCODE -eq 0 -and (Test-Path -Path $OutputPath)) {
+                    $fileSize = (Get-Item -Path $OutputPath).Length
+                    if ($fileSize -gt 10240) {
+                        Write-Status "curl download successful: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
+                        $downloadSuccess = $true
+                    }
+                }
+            }
+        } catch {
+            Write-Status "curl method failed: $($_.Exception.Message)" "Warning"
+        }
+    }
+
+    return $downloadSuccess
 }
 
 # Alternative download using BITS (Background Intelligent Transfer Service)
@@ -892,15 +1076,39 @@ function Install-Nekobox {
 
     Write-Host "=== Installing Nekobox ===" -ForegroundColor Yellow
 
-    # Download Nekobox with multiple methods
+    # Download Nekobox with enhanced methods
     Write-Status "Downloading Nekobox..."
-    $downloadSuccess = Get-FileWithMultipleMethods -GoogleDriveID $NekoboxConfig.GoogleDriveID -DirectURL $NekoboxConfig.DirectURL -BackupURL "" -OutputPath $NekoboxZipPath
+    Write-Status "Using Google Drive ID: $($NekoboxConfig.GoogleDriveID)"
+
+    # Try enhanced Google Drive download first
+    $downloadSuccess = Get-GoogleDriveFile -FileID $NekoboxConfig.GoogleDriveID -OutputPath $NekoboxZipPath
 
     if (-not $downloadSuccess) {
         Write-Status "Primary Nekobox download failed. Trying alternative methods..." "Warning"
 
-        # Try backup Google Drive ID
-        if ($NekoboxConfig.BackupGoogleDriveID -and $NekoboxConfig.BackupGoogleDriveID -ne $NekoboxConfig.GoogleDriveID) {
+        # Try GitHub releases if available
+        if ($NekoboxConfig.GitHubURL) {
+            Write-Status "Trying GitHub download..."
+            try {
+                $webClient = New-Object System.Net.WebClient
+                $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                $webClient.DownloadFile($NekoboxConfig.GitHubURL, $NekoboxZipPath)
+                $webClient.Dispose()
+
+                if (Test-Path -Path $NekoboxZipPath) {
+                    $fileSize = (Get-Item -Path $NekoboxZipPath).Length
+                    if ($fileSize -gt 10240) {
+                        Write-Status "GitHub download successful: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
+                        $downloadSuccess = $true
+                    }
+                }
+            } catch {
+                Write-Status "GitHub download failed: $($_.Exception.Message)" "Warning"
+            }
+        }
+
+        # Try backup Google Drive ID if different
+        if (-not $downloadSuccess -and $NekoboxConfig.BackupGoogleDriveID -and $NekoboxConfig.BackupGoogleDriveID -ne $NekoboxConfig.GoogleDriveID) {
             Write-Status "Trying backup Google Drive source..."
             $downloadSuccess = Get-GoogleDriveFile -FileID $NekoboxConfig.BackupGoogleDriveID -OutputPath $NekoboxZipPath
         }
@@ -933,34 +1141,26 @@ function Install-Nekobox {
 
         if (-not $downloadSuccess) {
             if ($Silent) {
-                Write-Status "Nekobox download failed in silent mode. Creating placeholder installation..." "Warning"
-
-                # Create a placeholder Nekobox installation for testing
-                try {
-                    if (-not (Test-Path -Path $NekoboxInstallPath)) {
-                        New-Item -ItemType Directory -Path $NekoboxInstallPath -Force | Out-Null
-                    }
-
-                    # Create a simple batch file as placeholder
-                    $placeholderContent = @"
-@echo off
-echo Nekobox placeholder - actual download failed
-echo Please manually install Nekobox from official source
-pause
-"@
-                    $placeholderPath = "$NekoboxInstallPath\nekobox_placeholder.bat"
-                    Set-Content -Path $placeholderPath -Value $placeholderContent
-
-                    Write-Status "Placeholder Nekobox created at: $NekoboxInstallPath" "Warning"
-                    Write-Status "Please manually install actual Nekobox later" "Warning"
-                    return
-                } catch {
-                    Write-Status "Failed to create placeholder Nekobox" "Error"
-                    return
-                }
+                Write-Status "Nekobox download failed in silent mode. Skipping Nekobox installation..." "Warning"
+                Write-Status "You can manually install Nekobox later from: https://github.com/MatsuriDayo/nekoray/releases" "Info"
+                return
             } else {
-                Write-Status "Failed to download Nekobox from all sources" "Error"
-                throw "Nekobox download failed"
+                Write-Status "All automatic Nekobox downloads failed." "Error"
+                Write-Host ""
+                Write-Host "You can:" -ForegroundColor Yellow
+                Write-Host "1. Check if Google Drive file is accessible: https://drive.google.com/file/d/$($NekoboxConfig.GoogleDriveID)/view" -ForegroundColor Cyan
+                Write-Host "2. Download manually from: https://github.com/MatsuriDayo/nekoray/releases" -ForegroundColor Cyan
+                Write-Host "3. Skip Nekobox installation for now" -ForegroundColor Cyan
+                Write-Host ""
+
+                $userChoice = Read-Host "Type 'skip' to skip Nekobox, or press Enter to continue with manual download"
+                if ($userChoice.ToLower() -eq "skip") {
+                    Write-Status "Nekobox installation skipped by user" "Warning"
+                    return
+                } else {
+                    Write-Status "Failed to download Nekobox from all sources" "Error"
+                    throw "Nekobox download failed"
+                }
             }
         }
     }
@@ -1105,26 +1305,29 @@ pause
 
 function Start-Setup {
     try {
+        # Step 1: Check admin rights
+        Test-AdminRights
+
+        # Step 2: Select region
+        $script:SelectedRegion = Select-Region
+
         Write-Host "Starting Windows Setup Process..." -ForegroundColor Green
-        Write-Host "Region: $Region" -ForegroundColor Cyan
+        Write-Host "Selected Region: $script:SelectedRegion" -ForegroundColor Cyan
         Write-Host "Skip Python: $SkipPython" -ForegroundColor Cyan
         Write-Host "Skip Chrome: $SkipChrome" -ForegroundColor Cyan
         Write-Host "Skip Nekobox: $SkipNekobox" -ForegroundColor Cyan
         Write-Host ""
 
-        # Step 1: Check admin rights
-        Test-AdminRights
-
-        # Step 2: Install Python and gdown
+        # Step 3: Install Python and gdown
         Install-PythonAndGdown
 
-        # Step 3: Configure system region
-        Set-SystemRegion -Region $Region
+        # Step 4: Configure system region
+        Set-SystemRegion -Region $script:SelectedRegion
 
-        # Step 4: Install Chrome
+        # Step 5: Install Chrome
         Install-Chrome
 
-        # Step 5: Install Nekobox
+        # Step 6: Install Nekobox
         Install-Nekobox
 
         Write-Host ""
@@ -1168,7 +1371,7 @@ function Start-Setup {
             }
         }
 
-        Write-Status "System region: $Region" "Info"
+        Write-Status "System region: $script:SelectedRegion" "Info"
 
     } catch {
         Write-Host ""
@@ -1196,18 +1399,19 @@ Write-Host ""
 
 # Show parameters
 Write-Host "Script Parameters:" -ForegroundColor Yellow
-Write-Host "  Region: $Region"
+Write-Host "  Region: $Region $(if ($Region -eq 'Interactive') {'(will be selected interactively)'} else {''})"
 Write-Host "  SkipPython: $SkipPython"
 Write-Host "  SkipChrome: $SkipChrome"
 Write-Host "  SkipNekobox: $SkipNekobox"
+Write-Host "  Silent: $Silent"
 Write-Host ""
 
-# Confirm execution
-if (-not $SkipPython -or -not $SkipChrome -or -not $SkipNekobox) {
+# Confirm execution (skip if silent)
+if (-not $Silent -and (-not $SkipPython -or -not $SkipChrome -or -not $SkipNekobox)) {
     $confirm = Read-Host "Do you want to proceed with the installation? (Y/N)"
     if ($confirm -notmatch '^[Yy]') {
         Write-Host "Installation cancelled by user." -ForegroundColor Yellow
-        Stop-Transcript
+        try { Stop-Transcript } catch { }
         exit 0
     }
 }
@@ -1344,10 +1548,61 @@ function Test-Installation {
     }
 }
 
+# Test Google Drive file accessibility
+function Test-GoogleDriveAccess {
+    Write-Host "=== Testing Google Drive File Access ===" -ForegroundColor Yellow
+    Write-Host ""
+
+    $testFileID = $NEKOBOX_GDRIVE_ID
+    Write-Host "Testing Nekobox file ID: $testFileID" -ForegroundColor Cyan
+
+    try {
+        $testUrl = "https://drive.google.com/uc?export=download&id=$testFileID"
+        $testPath = "$env:TEMP\gdrive_test.tmp"
+
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        $webClient.DownloadFile($testUrl, $testPath)
+        $webClient.Dispose()
+
+        if (Test-Path -Path $testPath) {
+            $fileSize = (Get-Item -Path $testPath).Length
+            $firstBytes = Get-Content -Path $testPath -TotalCount 1 -Raw -ErrorAction SilentlyContinue
+
+            if ($firstBytes -like "*<html*" -or $firstBytes -like "*<!DOCTYPE*") {
+                Write-Host "❌ FAIL: Google Drive returned HTML error page" -ForegroundColor Red
+                Write-Host "   File may not be public or ID is incorrect" -ForegroundColor Red
+                Write-Host "   Check: https://drive.google.com/file/d/$testFileID/view" -ForegroundColor Yellow
+            } elseif ($fileSize -lt 10240) {
+                Write-Host "❌ FAIL: File too small ($fileSize bytes)" -ForegroundColor Red
+            } else {
+                Write-Host "✓ PASS: File accessible ($([math]::Round($fileSize/1MB, 2)) MB)" -ForegroundColor Green
+            }
+
+            Remove-Item -Path $testPath -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "❌ FAIL: No file downloaded" -ForegroundColor Red
+        }
+
+    } catch {
+        Write-Host "❌ FAIL: Download error - $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    Write-Host ""
+}
+
 # Run tests if requested
 if ($args -contains "-Test" -or $args -contains "--test") {
     Test-Installation
     Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 0
+}
+
+# Run Google Drive test if requested
+if ($args -contains "-TestGDrive" -or $args -contains "--test-gdrive") {
+    Test-GoogleDriveAccess
     Write-Host "Press any key to exit..."
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 0
