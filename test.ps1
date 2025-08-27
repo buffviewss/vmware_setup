@@ -287,14 +287,18 @@ class DownloadEngine {
             "import gdown; gdown.download('https://drive.google.com/uc?id=$fileId', '$pythonPath', quiet=False)",
             "import gdown; gdown.download('$fileId', '$pythonPath', quiet=False)"
         )
-        
+
+        $tempPyFile = $null
         foreach ($method in $methods) {
             try {
                 Write-Log "Trying gdown method..." "Info"
 
+                # Write Python code to temp file to avoid command line length issues
+                $tempPyFile = "$env:TEMP\gdown_script_$([System.Guid]::NewGuid().ToString('N').Substring(0,8)).py"
+                Set-Content -Path $tempPyFile -Value $method -Encoding UTF8
+
                 # Use Start-Process with timeout to prevent hanging
-                $pythonCode = $method
-                $null = Start-Process -FilePath "python" -ArgumentList "-c", $pythonCode -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gdown_output.txt" -RedirectStandardError "$env:TEMP\gdown_error.txt"
+                $null = Start-Process -FilePath "python" -ArgumentList $tempPyFile -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gdown_output.txt" -RedirectStandardError "$env:TEMP\gdown_error.txt"
 
                 # Check if download completed successfully
                 if ((Test-Path -Path $outputPath) -and (Get-Item -Path $outputPath).Length -gt 10240) {
@@ -302,7 +306,7 @@ class DownloadEngine {
                     Write-Log "gdown download successful: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
 
                     # Clean up temp files
-                    @("$env:TEMP\gdown_output.txt", "$env:TEMP\gdown_error.txt") | ForEach-Object {
+                    @("$env:TEMP\gdown_output.txt", "$env:TEMP\gdown_error.txt", $tempPyFile) | ForEach-Object {
                         Remove-Item $_ -Force -ErrorAction SilentlyContinue
                     }
 
@@ -318,6 +322,11 @@ class DownloadEngine {
                 }
             } catch {
                 Write-Log "gdown method failed: $($_.Exception.Message)" "Warning"
+            } finally {
+                # Always clean up temp Python file
+                if ($tempPyFile -and (Test-Path $tempPyFile)) {
+                    Remove-Item $tempPyFile -Force -ErrorAction SilentlyContinue
+                }
             }
         }
         
