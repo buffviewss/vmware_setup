@@ -1,7 +1,6 @@
 # ===================================================================
-# Windows Setup Script - All-in-One Edition
+# Winsetup.ps1 - Production Windows Setup Script
 # Chrome + Python + Nekobox Auto Installer
-# Single file with clean architecture and comprehensive functionality
 # Compatible with PowerShell 5.x and Windows 10/11
 # ===================================================================
 
@@ -10,44 +9,46 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet("US", "UK", "AU", "SG", "NZ", "Interactive")]
+    [ValidateSet("US", "UK", "AU", "SG", "NZ", "Interactive", "Skip")]
     [string]$Region = "Interactive",
+    
+    [ValidateSet("Chrome135", "Chrome136", "Chrome137", "Chrome138", "Chrome141", "Interactive")]
+    [string]$ChromeVersion = "Interactive",
     
     [switch]$SkipPython,
     [switch]$SkipChrome, 
     [switch]$SkipNekobox,
+    [switch]$SkipRegion,
     [switch]$Silent,
     [switch]$Test,
     [switch]$TestGDrive,
-    [switch]$Benchmark
+    [switch]$Benchmark,
+    [switch]$ShowCurrentRegion
 )
 
 # ===================================================================
-# CONFIGURATION & CONSTANTS
+# CONFIGURATION
 # ===================================================================
 
-# Script configuration
 $script:Config = @{
-    Version = "2.0.0"
-    ErrorActionPreference = "Continue"
+    Version = "3.0.0"
     LogFile = "$env:USERPROFILE\Downloads\Winsetup_Log.txt"
     TempDir = $env:TEMP
     UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    DesktopPath = [Environment]::GetFolderPath("Desktop")
 }
 
-# Google Drive file IDs - Centralized configuration
 $script:GoogleDriveFiles = @{
     Chrome = @{
-        "Chrome 135.0.7049.96"   = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H"
-        "Chrome 136.0.7103.114"  = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc"
-        "Chrome 137.0.7151.120"  = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6"
-        "Chrome 138.0.7194.0"    = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda"
-        "Chrome 141.0.7340.0"    = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7"
+        "Chrome135" = @{ Name = "Chrome 135.0.7049.96"; ID = "1ydDsvNEk-MUNLpOnsi0Qt5RpY-2dUD1H" }
+        "Chrome136" = @{ Name = "Chrome 136.0.7103.114"; ID = "1d-E1sy7ztydiulYyMJvl7lQx9NCrVIkc" }
+        "Chrome137" = @{ Name = "Chrome 137.0.7151.120"; ID = "13_BfLqye5sVvWZMD6A-QzaCgHjsoWO-6" }
+        "Chrome138" = @{ Name = "Chrome 138.0.7194.0"; ID = "1L1mJpZEq-HeoE6u8-7gJrgOWpuYzJFda" }
+        "Chrome141" = @{ Name = "Chrome 141.0.7340.0"; ID = "1cXO_K7Vy9uIlqPpq9QtMfnOB8AHyjCY7" }
     }
     Nekobox = "1Rs7as6-oHv9IIHAurlgwmc_WigSLYHJb"
 }
 
-# Application configurations
 $script:Apps = @{
     Python = @{
         Version = "3.12.0"
@@ -55,34 +56,39 @@ $script:Apps = @{
         InstallArgs = "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0"
     }
     Chrome = @{
-        Versions = @(
-            @{ Name = "Chrome 135.0.7049.96"; ID = $script:GoogleDriveFiles.Chrome["Chrome 135.0.7049.96"] }
-            @{ Name = "Chrome 136.0.7103.114"; ID = $script:GoogleDriveFiles.Chrome["Chrome 136.0.7103.114"] }
-            @{ Name = "Chrome 137.0.7151.120"; ID = $script:GoogleDriveFiles.Chrome["Chrome 137.0.7151.120"] }
-            @{ Name = "Chrome 138.0.7194.0"; ID = $script:GoogleDriveFiles.Chrome["Chrome 138.0.7194.0"] }
-            @{ Name = "Chrome 141.0.7340.0"; ID = $script:GoogleDriveFiles.Chrome["Chrome 141.0.7340.0"] }
-        )
-        FallbackURL = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
         InstallArgs = "/silent /install"
     }
     Nekobox = @{
-        GoogleDriveID = $script:GoogleDriveFiles.Nekobox
-        GitHubURL = "https://github.com/MatsuriDayo/nekoray/releases/latest/download/nekoray-3.26-2023-12-09-windows64.zip"
         InstallPath = "$env:ProgramFiles\Nekobox"
+        ExecutableName = "nekoray.exe"
     }
 }
 
-# Region configurations
 $script:Regions = @{
-    "US" = @{ Language = "en-US"; DisplayName = "United States" }
-    "UK" = @{ Language = "en-GB"; DisplayName = "United Kingdom" }
-    "AU" = @{ Language = "en-AU"; DisplayName = "Australia" }
-    "SG" = @{ Language = "en-SG"; DisplayName = "Singapore" }
-    "NZ" = @{ Language = "en-NZ"; DisplayName = "New Zealand" }
+    "US" = @{ 
+        Language = "en-US"; DisplayName = "🇺🇸 United States"; Timezone = "Eastern Standard Time"
+        Currency = "USD"; DateFormat = "M/d/yyyy"; NumberFormat = "en-US"
+    }
+    "UK" = @{ 
+        Language = "en-GB"; DisplayName = "🇬🇧 United Kingdom"; Timezone = "GMT Standard Time"
+        Currency = "GBP"; DateFormat = "dd/MM/yyyy"; NumberFormat = "en-GB"
+    }
+    "AU" = @{ 
+        Language = "en-AU"; DisplayName = "🇦🇺 Australia"; Timezone = "AUS Eastern Standard Time"
+        Currency = "AUD"; DateFormat = "d/MM/yyyy"; NumberFormat = "en-AU"
+    }
+    "SG" = @{ 
+        Language = "en-SG"; DisplayName = "🇸🇬 Singapore"; Timezone = "Singapore Standard Time"
+        Currency = "SGD"; DateFormat = "d/M/yyyy"; NumberFormat = "en-SG"
+    }
+    "NZ" = @{ 
+        Language = "en-NZ"; DisplayName = "🇳🇿 New Zealand"; Timezone = "New Zealand Standard Time"
+        Currency = "NZD"; DateFormat = "d/MM/yyyy"; NumberFormat = "en-NZ"
+    }
 }
 
 # ===================================================================
-# CORE UTILITY FUNCTIONS
+# UTILITY FUNCTIONS
 # ===================================================================
 
 function Write-Log {
@@ -95,26 +101,14 @@ function Write-Log {
         [string]$Level = "Info"
     )
     
-    $colors = @{
-        "Info" = "White"
-        "Success" = "Green" 
-        "Warning" = "Yellow"
-        "Error" = "Red"
-    }
-    
-    $prefixes = @{
-        "Info" = "[i]"
-        "Success" = "[+]"
-        "Warning" = "[*]"
-        "Error" = "[!]"
-    }
+    $colors = @{ "Info" = "White"; "Success" = "Green"; "Warning" = "Yellow"; "Error" = "Red" }
+    $prefixes = @{ "Info" = "[i]"; "Success" = "[+]"; "Warning" = "[*]"; "Error" = "[!]" }
     
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logMessage = "$timestamp $($prefixes[$Level]) $Message"
     
     Write-Host "$($prefixes[$Level]) $Message" -ForegroundColor $colors[$Level]
     
-    # Write to log file if transcript is active
     try {
         Add-Content -Path $script:Config.LogFile -Value $logMessage -ErrorAction SilentlyContinue
     } catch {
@@ -128,7 +122,6 @@ function Test-Prerequisites {
     
     Write-Log "Checking prerequisites..." "Info"
     
-    # Check admin rights
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Log "Administrator rights required. Please run as Administrator." "Error"
@@ -136,26 +129,76 @@ function Test-Prerequisites {
     }
     Write-Log "Administrator rights confirmed" "Success"
     
-    # Check PowerShell version
     if ($PSVersionTable.PSVersion.Major -lt 5) {
         Write-Log "PowerShell 5.0 or higher required" "Error"
         throw "PowerShell version not supported"
     }
     Write-Log "PowerShell version: $($PSVersionTable.PSVersion)" "Success"
     
-    # Check internet connectivity
     try {
         $null = Test-NetConnection -ComputerName "8.8.8.8" -Port 53 -InformationLevel Quiet -ErrorAction Stop
         Write-Log "Internet connectivity confirmed" "Success"
     } catch {
         Write-Log "Internet connectivity required" "Warning"
     }
+    
+    $osVersion = [System.Environment]::OSVersion.Version
+    if ($osVersion.Major -lt 10) {
+        Write-Log "Windows 10 or higher recommended" "Warning"
+    } else {
+        Write-Log "Windows version: $($osVersion.Major).$($osVersion.Minor)" "Success"
+    }
+}
+
+function Get-CurrentRegionSettings {
+    try {
+        $culture = Get-Culture
+        $timezone = Get-TimeZone
+        $location = Get-WinHomeLocation -ErrorAction SilentlyContinue
+        
+        return @{
+            Language = $culture.Name
+            DisplayName = $culture.DisplayName
+            Timezone = $timezone.Id
+            TimezoneDisplay = $timezone.DisplayName
+            Currency = $culture.NumberFormat.CurrencySymbol
+            DateFormat = $culture.DateTimeFormat.ShortDatePattern
+            Country = if ($location) { $location.HomeLocation } else { "Unknown" }
+        }
+    } catch {
+        Write-Log "Could not retrieve current region settings: $($_.Exception.Message)" "Warning"
+        return $null
+    }
+}
+
+function Show-CurrentRegionSettings {
+    Write-Host ""
+    Write-Host "=== Current System Region Settings ===" -ForegroundColor Cyan
+    
+    $current = Get-CurrentRegionSettings
+    if ($current) {
+        Write-Host "Language: $($current.Language) ($($current.DisplayName))" -ForegroundColor White
+        Write-Host "Timezone: $($current.TimezoneDisplay)" -ForegroundColor White
+        Write-Host "Currency: $($current.Currency)" -ForegroundColor White
+        Write-Host "Date Format: $($current.DateFormat)" -ForegroundColor White
+        if ($current.Country -ne "Unknown") {
+            Write-Host "Country Code: $($current.Country)" -ForegroundColor White
+        }
+        
+        $matchedRegion = $script:Regions.Keys | Where-Object { $script:Regions[$_].Language -eq $current.Language } | Select-Object -First 1
+        
+        if ($matchedRegion) {
+            Write-Host "Detected Region: $($script:Regions[$matchedRegion].DisplayName)" -ForegroundColor Green
+        } else {
+            Write-Host "Region: Custom/Other" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Could not retrieve current settings" -ForegroundColor Red
+    }
+    Write-Host ""
 }
 
 function Initialize-Logging {
-    [CmdletBinding()]
-    param()
-    
     try {
         Start-Transcript -Path $script:Config.LogFile -Append -ErrorAction SilentlyContinue
         Write-Log "Logging initialized: $($script:Config.LogFile)" "Info"
@@ -166,9 +209,6 @@ function Initialize-Logging {
 }
 
 function Stop-Logging {
-    [CmdletBinding()]
-    param()
-    
     try {
         Write-Log "Winsetup v$($script:Config.Version) completed" "Info"
         Stop-Transcript -ErrorAction SilentlyContinue
@@ -208,16 +248,12 @@ class DownloadEngine {
     [bool] DownloadGoogleDriveFile([string]$fileId, [string]$outputPath) {
         Write-Log "Downloading from Google Drive ID: $fileId" "Info"
         
-        # Ensure Python and gdown are available
         if (-not $this.EnsureGdown()) {
             Write-Log "gdown not available, falling back to direct download" "Warning"
             return $this.DownloadGoogleDriveDirect($fileId, $outputPath)
         }
         
-        # Convert path for Python compatibility
         $pythonPath = $outputPath.Replace('\', '/')
-        
-        # Try gdown methods
         $methods = @(
             "import gdown; gdown.download(id='$fileId', output='$pythonPath', quiet=False, fuzzy=True)",
             "import gdown; gdown.download('https://drive.google.com/uc?id=$fileId', '$pythonPath', quiet=False)",
@@ -239,7 +275,6 @@ class DownloadEngine {
             }
         }
         
-        # Fallback to direct download
         return $this.DownloadGoogleDriveDirect($fileId, $outputPath)
     }
     
@@ -276,7 +311,6 @@ class DownloadEngine {
         
         foreach ($url in $urls) {
             if ($this.DownloadFile($url, $outputPath)) {
-                # Check if we got HTML instead of the actual file
                 $firstLine = Get-Content -Path $outputPath -TotalCount 1 -ErrorAction SilentlyContinue
                 if ($firstLine -notlike "*html*" -and $firstLine -notlike "*DOCTYPE*") {
                     $fileSize = (Get-Item -Path $outputPath).Length
@@ -292,59 +326,113 @@ class DownloadEngine {
     }
     
     [bool] ValidateDownload([string]$filePath, [int]$minSizeKB = 1) {
-        if (-not (Test-Path -Path $filePath)) {
-            return $false
-        }
-        
-        $fileSize = (Get-Item -Path $filePath).Length
-        return ($fileSize -gt ($minSizeKB * 1024))
+        return (Test-Path -Path $filePath) -and ((Get-Item -Path $filePath).Length -gt ($minSizeKB * 1024))
     }
 }
 
 # ===================================================================
-# REGION SELECTION
+# SELECTION FUNCTIONS
 # ===================================================================
 
 function Select-UserRegion {
-    [CmdletBinding()]
-    param()
-    
+    if ($Region -eq "Skip" -or $SkipRegion) {
+        Write-Log "Region configuration skipped" "Info"
+        return "Skip"
+    }
+
     if ($Region -ne "Interactive") {
         Write-Log "Region pre-selected: $Region" "Info"
         return $Region
     }
-    
+
     if ($Silent) {
         Write-Log "Silent mode: Using default region US" "Info"
         return "US"
     }
-    
-    Write-Host ""
+
+    Show-CurrentRegionSettings
+
     Write-Host "=== Region Selection ===" -ForegroundColor Yellow
-    Write-Host "Please select your region:" -ForegroundColor Cyan
+    Write-Host "Please select your target region:" -ForegroundColor Cyan
     Write-Host ""
-    
+
     $regionOptions = @()
     $counter = 1
+
     foreach ($key in $script:Regions.Keys | Sort-Object) {
-        $displayName = $script:Regions[$key].DisplayName
-        Write-Host "$counter. $displayName ($key)" -ForegroundColor White
+        $region = $script:Regions[$key]
+        Write-Host "$counter. $($region.DisplayName)" -ForegroundColor White
+        Write-Host "   Language: $($region.Language) | Timezone: $($region.Timezone)" -ForegroundColor Gray
+        Write-Host "   Currency: $($region.Currency) | Date: $($region.DateFormat)" -ForegroundColor Gray
+        Write-Host ""
         $regionOptions += $key
         $counter++
     }
+
+    Write-Host "$counter. 🚫 Skip region configuration" -ForegroundColor Yellow
+    $regionOptions += "Skip"
     Write-Host ""
-    
+
     do {
-        $selection = Read-Host "Select region (1-$($regionOptions.Count))"
+        $selection = Read-Host "Select option (1-$($regionOptions.Count))"
         $selectionInt = 0
-        
-        if ([int]::TryParse($selection, [ref]$selectionInt) -and 
+
+        if ([int]::TryParse($selection, [ref]$selectionInt) -and
             $selectionInt -ge 1 -and $selectionInt -le $regionOptions.Count) {
             $selectedRegion = $regionOptions[$selectionInt - 1]
-            Write-Log "Selected region: $selectedRegion" "Success"
+
+            if ($selectedRegion -eq "Skip") {
+                Write-Log "Region configuration skipped by user" "Info"
+            } else {
+                Write-Log "Selected region: $($script:Regions[$selectedRegion].DisplayName)" "Success"
+            }
             return $selectedRegion
         } else {
             Write-Log "Invalid selection. Please choose 1-$($regionOptions.Count)." "Error"
+        }
+    } while ($true)
+}
+
+function Select-ChromeVersion {
+    if ($ChromeVersion -ne "Interactive") {
+        Write-Log "Chrome version pre-selected: $ChromeVersion" "Info"
+        return $ChromeVersion
+    }
+
+    if ($Silent) {
+        Write-Log "Silent mode: Using latest Chrome version" "Info"
+        return "Chrome141"
+    }
+
+    Write-Host ""
+    Write-Host "=== Chrome Version Selection ===" -ForegroundColor Yellow
+    Write-Host "Please select Chrome version to install:" -ForegroundColor Cyan
+    Write-Host ""
+
+    $versionOptions = @()
+    $counter = 1
+
+    foreach ($key in $script:GoogleDriveFiles.Chrome.Keys | Sort-Object) {
+        $version = $script:GoogleDriveFiles.Chrome[$key]
+        Write-Host "$counter. $($version.Name)" -ForegroundColor White
+        Write-Host "   Google Drive ID: $($version.ID)" -ForegroundColor Gray
+        Write-Host ""
+        $versionOptions += $key
+        $counter++
+    }
+
+    do {
+        $selection = Read-Host "Select Chrome version (1-$($versionOptions.Count))"
+        $selectionInt = 0
+
+        if ([int]::TryParse($selection, [ref]$selectionInt) -and
+            $selectionInt -ge 1 -and $selectionInt -le $versionOptions.Count) {
+            $selectedVersion = $versionOptions[$selectionInt - 1]
+            $versionInfo = $script:GoogleDriveFiles.Chrome[$selectedVersion]
+            Write-Log "Selected Chrome version: $($versionInfo.Name)" "Success"
+            return $selectedVersion
+        } else {
+            Write-Log "Invalid selection. Please choose 1-$($versionOptions.Count)." "Error"
         }
     } while ($true)
 }
@@ -355,20 +443,14 @@ function Select-UserRegion {
 
 function Install-Python {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [DownloadEngine]$Downloader
-    )
+    param([Parameter(Mandatory)][DownloadEngine]$Downloader)
 
     Write-Log "=== Installing Python ===" "Info"
 
-    # Check if Python is already installed
     try {
         $pythonVersion = python --version 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Log "Python already installed: $pythonVersion" "Success"
-
-            # Ensure gdown is available
             if (-not $Downloader.EnsureGdown()) {
                 Write-Log "Failed to install gdown" "Warning"
             } else {
@@ -384,7 +466,6 @@ function Install-Python {
 
     $installerPath = Join-Path $script:Config.TempDir "python_installer.exe"
 
-    # Download Python installer
     if (-not $Downloader.DownloadFile($script:Apps.Python.URL, $installerPath)) {
         throw "Failed to download Python installer"
     }
@@ -395,26 +476,21 @@ function Install-Python {
 
     Write-Log "Installing Python..." "Info"
 
-    # Install Python
     $process = Start-Process -FilePath $installerPath -ArgumentList $script:Apps.Python.InstallArgs -Wait -PassThru
 
     if ($process.ExitCode -ne 0) {
         throw "Python installation failed with exit code: $($process.ExitCode)"
     }
 
-    # Clean up installer
     Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
 
-    # Refresh environment variables
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
-    # Verify installation
     try {
         $pythonVersion = python --version 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Log "Python installed successfully: $pythonVersion" "Success"
 
-            # Install gdown
             if (-not $Downloader.EnsureGdown()) {
                 Write-Log "Failed to install gdown" "Warning"
             } else {
@@ -430,10 +506,12 @@ function Install-Python {
 
 function Set-SystemRegion {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Region
-    )
+    param([Parameter(Mandatory)][string]$Region)
+
+    if ($Region -eq "Skip") {
+        Write-Log "Region configuration skipped" "Info"
+        return
+    }
 
     Write-Log "=== Configuring System Region ===" "Info"
 
@@ -443,173 +521,392 @@ function Set-SystemRegion {
     }
 
     $regionConfig = $script:Regions[$Region]
-    $languageCode = $regionConfig.Language
+    Write-Log "Configuring system for: $($regionConfig.DisplayName)" "Info"
 
     try {
-        Write-Log "Setting system language to: $languageCode" "Info"
+        Write-Log "Setting system language to: $($regionConfig.Language)" "Info"
+        Set-WinUILanguageOverride -Language $regionConfig.Language -ErrorAction SilentlyContinue
+        Set-WinUserLanguageList $regionConfig.Language -Force -ErrorAction SilentlyContinue
+        Set-WinSystemLocale -SystemLocale $regionConfig.Language -ErrorAction SilentlyContinue
 
-        # Set system language and region
-        Set-WinUILanguageOverride -Language $languageCode -ErrorAction SilentlyContinue
-        Set-WinUserLanguageList $languageCode -Force -ErrorAction SilentlyContinue
+        Write-Log "Setting timezone to: $($regionConfig.Timezone)" "Info"
+        try {
+            Set-TimeZone -Id $regionConfig.Timezone -ErrorAction Stop
+            Write-Log "Timezone set successfully" "Success"
+        } catch {
+            Write-Log "Could not set timezone: $($_.Exception.Message)" "Warning"
+            Set-TimeZone -Id "UTC" -ErrorAction SilentlyContinue
+            Write-Log "Fallback: Set timezone to UTC" "Info"
+        }
 
-        # Set timezone to UTC
-        Write-Log "Setting timezone to UTC" "Info"
-        Set-TimeZone -Id "UTC" -ErrorAction SilentlyContinue
+        Write-Log "Setting regional formats for: $($regionConfig.NumberFormat)" "Info"
+        Set-Culture -CultureInfo $regionConfig.Language -ErrorAction SilentlyContinue
 
-        # Set keyboard layout to US
-        Write-Log "Setting keyboard layout to US" "Info"
+        try {
+            $geoId = switch ($Region) {
+                "US" { 244 }; "UK" { 242 }; "AU" { 12 }; "SG" { 215 }; "NZ" { 183 }; default { 244 }
+            }
+            Set-WinHomeLocation -GeoId $geoId -ErrorAction SilentlyContinue
+            Write-Log "Home location set for region" "Success"
+        } catch {
+            Write-Log "Could not set home location" "Warning"
+        }
+
+        Write-Log "Setting keyboard layout to US (for remote access compatibility)" "Info"
         Set-WinDefaultInputMethodOverride -InputTip "0409:00000409" -ErrorAction SilentlyContinue
 
+        try {
+            $registryPath = "HKCU:\Control Panel\International"
+            if (Test-Path $registryPath) {
+                Set-ItemProperty -Path $registryPath -Name "sShortDate" -Value $regionConfig.DateFormat -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $registryPath -Name "sCurrency" -Value $regionConfig.Currency -ErrorAction SilentlyContinue
+                Write-Log "Registry regional settings updated" "Success"
+            }
+        } catch {
+            Write-Log "Could not update registry settings" "Warning"
+        }
+
         Write-Log "System region configured successfully for $($regionConfig.DisplayName)" "Success"
+        Write-Log "Note: Some changes may require a system restart to take full effect" "Info"
+
     } catch {
-        Write-Log "Failed to configure system region: $($_.Exception.Message)" "Warning"
+        Write-Log "Failed to configure system region: $($_.Exception.Message)" "Error"
+        throw "Region configuration failed"
+    }
+}
+
+function Uninstall-ExistingChrome {
+    Write-Log "Checking for existing Chrome installations..." "Info"
+
+    $chromeInstalls = @()
+    $chromeInstalls += Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                      Where-Object { $_.DisplayName -like "*Google Chrome*" }
+    $chromeInstalls += Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                      Where-Object { $_.DisplayName -like "*Google Chrome*" }
+
+    if ($chromeInstalls.Count -eq 0) {
+        Write-Log "No existing Chrome installation found" "Info"
+        return
+    }
+
+    foreach ($chrome in $chromeInstalls) {
+        Write-Log "Found Chrome: $($chrome.DisplayName) $($chrome.DisplayVersion)" "Info"
+
+        if ($chrome.UninstallString) {
+            Write-Log "Uninstalling existing Chrome..." "Info"
+
+            try {
+                $uninstallCmd = $chrome.UninstallString
+                if ($uninstallCmd -match '"([^"]+)"(.*)') {
+                    $uninstallExe = $matches[1]
+                    $uninstallArgs = $matches[2].Trim() + " --uninstall --force-uninstall --system-level"
+                } else {
+                    $uninstallExe = $uninstallCmd
+                    $uninstallArgs = "--uninstall --force-uninstall --system-level"
+                }
+
+                $process = Start-Process -FilePath $uninstallExe -ArgumentList $uninstallArgs -Wait -PassThru -WindowStyle Hidden
+
+                if ($process.ExitCode -eq 0) {
+                    Write-Log "Chrome uninstalled successfully" "Success"
+                } else {
+                    Write-Log "Chrome uninstall completed with exit code: $($process.ExitCode)" "Warning"
+                }
+            } catch {
+                Write-Log "Failed to uninstall Chrome: $($_.Exception.Message)" "Warning"
+            }
+        }
+    }
+
+    $chromePaths = @(
+        "$env:ProgramFiles\Google\Chrome",
+        "$env:ProgramFiles(x86)\Google\Chrome",
+        "$env:LOCALAPPDATA\Google\Chrome",
+        "$env:APPDATA\Google\Chrome"
+    )
+
+    foreach ($path in $chromePaths) {
+        if (Test-Path $path) {
+            try {
+                Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
+                Write-Log "Removed Chrome directory: $path" "Success"
+            } catch {
+                Write-Log "Could not remove Chrome directory: $path" "Warning"
+            }
+        }
+    }
+
+    $registryPaths = @(
+        "HKLM:\SOFTWARE\Google",
+        "HKLM:\SOFTWARE\WOW6432Node\Google",
+        "HKCU:\SOFTWARE\Google\Chrome"
+    )
+
+    foreach ($regPath in $registryPaths) {
+        if (Test-Path $regPath) {
+            try {
+                Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Log "Cleaned Chrome registry: $regPath" "Success"
+            } catch {
+                Write-Log "Could not clean Chrome registry: $regPath" "Warning"
+            }
+        }
+    }
+
+    Write-Log "Chrome cleanup completed" "Success"
+}
+
+function Block-ChromeUpdates {
+    Write-Log "Blocking Chrome updates comprehensively..." "Info"
+
+    try {
+        $updatePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
+        if (-not (Test-Path $updatePolicyPath)) {
+            New-Item -Path $updatePolicyPath -Force | Out-Null
+        }
+
+        $updatePolicies = @{
+            "UpdateDefault" = 0
+            "AutoUpdateCheckPeriodMinutes" = 0
+            "Update{8A69D345-D564-463C-AFF1-A69D9E530F96}" = 0
+            "Install{8A69D345-D564-463C-AFF1-A69D9E530F96}" = 0
+            "UpdateSuppressedStartHour" = 0
+            "UpdateSuppressedDurationMin" = 1440
+        }
+
+        foreach ($policy in $updatePolicies.GetEnumerator()) {
+            New-ItemProperty -Path $updatePolicyPath -Name $policy.Key -Value $policy.Value -PropertyType DWord -Force | Out-Null
+        }
+
+        $chromePolicyPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+        if (-not (Test-Path $chromePolicyPath)) {
+            New-Item -Path $chromePolicyPath -Force | Out-Null
+        }
+
+        $chromePolicies = @{
+            "UpdatesSuppressed" = 1; "DefaultBrowserSettingEnabled" = 0; "ShowHomeButton" = 1
+            "BookmarkBarEnabled" = 1; "PasswordManagerEnabled" = 0; "AutofillAddressEnabled" = 0
+            "AutofillCreditCardEnabled" = 0; "SyncDisabled" = 1; "SigninAllowed" = 0
+            "CloudPrintProxyEnabled" = 0; "MetricsReportingEnabled" = 0; "SearchSuggestEnabled" = 0
+            "AlternateErrorPagesEnabled" = 0; "SpellCheckServiceEnabled" = 0; "SafeBrowsingEnabled" = 0
+            "AutoplayPolicy" = 2
+        }
+
+        foreach ($policy in $chromePolicies.GetEnumerator()) {
+            New-ItemProperty -Path $chromePolicyPath -Name $policy.Key -Value $policy.Value -PropertyType DWord -Force | Out-Null
+        }
+
+        $services = @("gupdate", "gupdatem", "GoogleUpdaterService", "GoogleUpdaterInternalService")
+        foreach ($service in $services) {
+            try {
+                $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
+                if ($svc) {
+                    Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+                    Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
+                    Write-Log "Disabled service: $service" "Success"
+                }
+            } catch {
+                # Service might not exist, continue
+            }
+        }
+
+        $updatePaths = @(
+            "$env:ProgramFiles\Google\Update",
+            "$env:ProgramFiles(x86)\Google\Update",
+            "$env:LOCALAPPDATA\Google\Update"
+        )
+
+        foreach ($path in $updatePaths) {
+            if (Test-Path $path) {
+                try {
+                    $updateExe = Join-Path $path "GoogleUpdate.exe"
+                    if (Test-Path $updateExe) {
+                        Rename-Item -Path $updateExe -NewName "GoogleUpdate.exe.disabled" -Force -ErrorAction SilentlyContinue
+                    }
+
+                    $taskPath = Join-Path $path "GoogleUpdate.exe"
+                    if (Test-Path $taskPath) {
+                        Remove-Item -Path $taskPath -Force -ErrorAction SilentlyContinue
+                    }
+                } catch {
+                    Write-Log "Could not disable updates in: $path" "Warning"
+                }
+            }
+        }
+
+        $taskNames = @("GoogleUpdateTaskMachineCore", "GoogleUpdateTaskMachineUA", "GoogleUpdateTaskUserS-*")
+        foreach ($taskName in $taskNames) {
+            try {
+                Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
+            } catch {
+                # Task might not exist
+            }
+        }
+
+        Write-Log "Chrome updates blocked comprehensively" "Success"
+
+    } catch {
+        Write-Log "Failed to block Chrome updates: $($_.Exception.Message)" "Warning"
+    }
+}
+
+function Add-ChromeToTaskbar {
+    Write-Log "Pinning Chrome to taskbar..." "Info"
+
+    try {
+        $chromePaths = @(
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+        )
+
+        $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+        if (-not $chromeExe) {
+            Write-Log "Chrome executable not found for taskbar pinning" "Warning"
+            return
+        }
+
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.Namespace((Split-Path $chromeExe))
+        $item = $folder.ParseName((Split-Path $chromeExe -Leaf))
+
+        $verbs = $item.Verbs()
+        foreach ($verb in $verbs) {
+            if ($verb.Name -match "taskbar" -or $verb.Name -match "Pin") {
+                $verb.DoIt()
+                Write-Log "Chrome pinned to taskbar" "Success"
+                break
+            }
+        }
+
+        if (-not $pinned) {
+            try {
+                $pinToTaskbar = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class TaskbarPin {
+    [DllImport("shell32.dll")]
+    public static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid rfid, uint dwFlags, IntPtr hToken, out IntPtr pszPath);
+
+    public static void PinToTaskbar(string filePath) {
+        dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("Shell.Application"));
+        dynamic folder = shell.NameSpace(System.IO.Path.GetDirectoryName(filePath));
+        dynamic folderItem = folder.ParseName(System.IO.Path.GetFileName(filePath));
+        dynamic itemVerbs = folderItem.Verbs();
+
+        for (int i = 0; i < itemVerbs.Count; i++) {
+            dynamic verb = itemVerbs.Item(i);
+            if (verb.Name.Contains("taskbar") || verb.Name.Contains("Pin")) {
+                verb.DoIt();
+                break;
+            }
+        }
+    }
+}
+"@
+                Add-Type -TypeDefinition $pinToTaskbar -ErrorAction SilentlyContinue
+                [TaskbarPin]::PinToTaskbar($chromeExe)
+                Write-Log "Chrome pinned to taskbar (alternative method)" "Success"
+            } catch {
+                Write-Log "Could not pin Chrome to taskbar: $($_.Exception.Message)" "Warning"
+            }
+        }
+
+    } catch {
+        Write-Log "Failed to pin Chrome to taskbar: $($_.Exception.Message)" "Warning"
     }
 }
 
 function Install-Chrome {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [DownloadEngine]$Downloader
+        [Parameter(Mandatory)][DownloadEngine]$Downloader,
+        [Parameter(Mandatory)][string]$ChromeVersion
     )
 
     Write-Log "=== Installing Chrome ===" "Info"
 
-    # Check if Chrome is already installed
-    $chromeInstalled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
-                      Where-Object { $_.DisplayName -like "*Google Chrome*" }
+    Uninstall-ExistingChrome
 
-    if ($chromeInstalled) {
-        Write-Log "Chrome already installed: $($chromeInstalled.DisplayVersion)" "Success"
-        return
+    if (-not $script:GoogleDriveFiles.Chrome.ContainsKey($ChromeVersion)) {
+        throw "Invalid Chrome version: $ChromeVersion"
     }
+
+    $versionInfo = $script:GoogleDriveFiles.Chrome[$ChromeVersion]
+    Write-Log "Installing Chrome version: $($versionInfo.Name)" "Info"
 
     $installerPath = Join-Path $script:Config.TempDir "chrome_installer.exe"
-    $downloadSuccess = $false
 
-    # Try Chrome versions from Google Drive
-    foreach ($version in $script:Apps.Chrome.Versions) {
-        Write-Log "Trying Chrome version: $($version.Name)" "Info"
-
-        if ($Downloader.DownloadGoogleDriveFile($version.ID, $installerPath)) {
-            if ($Downloader.ValidateDownload($installerPath, 1024)) {
-                Write-Log "Downloaded Chrome installer: $($version.Name)" "Success"
-                $downloadSuccess = $true
-                break
-            }
-        }
-
-        # Clean up failed download
-        Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+    if (-not $Downloader.DownloadGoogleDriveFile($versionInfo.ID, $installerPath)) {
+        throw "Failed to download Chrome installer for version: $($versionInfo.Name)"
     }
 
-    # Fallback to official Chrome download
-    if (-not $downloadSuccess) {
-        Write-Log "Trying official Chrome download..." "Info"
-        if ($Downloader.DownloadFile($script:Apps.Chrome.FallbackURL, $installerPath)) {
-            if ($Downloader.ValidateDownload($installerPath, 1024)) {
-                Write-Log "Downloaded Chrome from official source" "Success"
-                $downloadSuccess = $true
-            }
-        }
-    }
-
-    if (-not $downloadSuccess) {
-        throw "Failed to download Chrome installer from any source"
+    if (-not $Downloader.ValidateDownload($installerPath, 1024)) {
+        throw "Chrome installer download is invalid"
     }
 
     Write-Log "Installing Chrome..." "Info"
 
-    # Install Chrome
     $process = Start-Process -FilePath $installerPath -ArgumentList $script:Apps.Chrome.InstallArgs -Wait -PassThru
 
     if ($process.ExitCode -ne 0) {
         Write-Log "Chrome installation may have issues (exit code: $($process.ExitCode))" "Warning"
     }
 
-    # Clean up installer
     Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
 
-    # Disable Chrome auto-update
-    try {
-        $policyPath = "HKLM:\SOFTWARE\Policies\Google\Update"
-        if (-not (Test-Path -Path $policyPath)) {
-            New-Item -Path $policyPath -Force | Out-Null
-        }
-        New-ItemProperty -Path $policyPath -Name "UpdateDefault" -Value 0 -PropertyType DWord -Force | Out-Null
-        Write-Log "Chrome auto-update disabled" "Success"
-    } catch {
-        Write-Log "Could not disable Chrome auto-update" "Warning"
-    }
+    Block-ChromeUpdates
+    Add-ChromeToTaskbar
 
-    Write-Log "Chrome installation completed" "Success"
+    Write-Log "Chrome installation completed: $($versionInfo.Name)" "Success"
 }
 
 function Install-Nekobox {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [DownloadEngine]$Downloader
-    )
+    param([Parameter(Mandatory)][DownloadEngine]$Downloader)
 
     Write-Log "=== Installing Nekobox ===" "Info"
 
-    # Check if Nekobox is already installed
     if (Test-Path -Path $script:Apps.Nekobox.InstallPath) {
-        $existingFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
-        if ($existingFiles.Count -gt 0) {
-            Write-Log "Nekobox already installed at: $($script:Apps.Nekobox.InstallPath)" "Success"
-            return
+        Write-Log "Removing existing Nekobox installation..." "Info"
+        try {
+            Remove-Item -Path $script:Apps.Nekobox.InstallPath -Recurse -Force
+            Write-Log "Existing Nekobox removed" "Success"
+        } catch {
+            Write-Log "Could not remove existing Nekobox: $($_.Exception.Message)" "Warning"
         }
     }
 
     $zipPath = Join-Path $script:Config.TempDir "nekobox.zip"
     $extractPath = Join-Path $script:Config.TempDir "nekobox_extract"
-    $downloadSuccess = $false
 
-    # Try Google Drive download
     Write-Log "Downloading Nekobox from Google Drive..." "Info"
-    if ($Downloader.DownloadGoogleDriveFile($script:Apps.Nekobox.GoogleDriveID, $zipPath)) {
-        if ($Downloader.ValidateDownload($zipPath, 1024)) {
-            Write-Log "Downloaded Nekobox from Google Drive" "Success"
-            $downloadSuccess = $true
-        }
-    }
-
-    # Fallback to GitHub
-    if (-not $downloadSuccess) {
-        Write-Log "Trying GitHub download..." "Info"
-        if ($Downloader.DownloadFile($script:Apps.Nekobox.GitHubURL, $zipPath)) {
-            if ($Downloader.ValidateDownload($zipPath, 1024)) {
-                Write-Log "Downloaded Nekobox from GitHub" "Success"
-                $downloadSuccess = $true
-            }
-        }
-    }
-
-    if (-not $downloadSuccess) {
+    if (-not $Downloader.DownloadGoogleDriveFile($script:GoogleDriveFiles.Nekobox, $zipPath)) {
         if ($Silent) {
             Write-Log "Nekobox download failed in silent mode. Skipping..." "Warning"
             return
         } else {
-            throw "Failed to download Nekobox from all sources"
+            throw "Failed to download Nekobox from Google Drive"
         }
     }
 
-    # Extract ZIP file
+    if (-not $Downloader.ValidateDownload($zipPath, 1024)) {
+        throw "Nekobox download is invalid"
+    }
+
+    Write-Log "Downloaded Nekobox successfully" "Success"
+
     Write-Log "Extracting Nekobox..." "Info"
 
     try {
-        # Remove existing extract directory
         if (Test-Path -Path $extractPath) {
             Remove-Item -Path $extractPath -Recurse -Force
         }
 
-        # Extract using .NET
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extractPath)
 
-        # Verify extraction
         $extractedFiles = Get-ChildItem -Path $extractPath -Recurse -Filter "*.exe"
         if ($extractedFiles.Count -eq 0) {
             throw "No executable files found in extracted archive"
@@ -617,12 +914,10 @@ function Install-Nekobox {
 
         Write-Log "Extracted $($extractedFiles.Count) executable files" "Success"
 
-        # Create installation directory
         if (-not (Test-Path -Path $script:Apps.Nekobox.InstallPath)) {
             New-Item -ItemType Directory -Path $script:Apps.Nekobox.InstallPath -Force | Out-Null
         }
 
-        # Copy files to installation directory
         $sourceDir = Get-ChildItem -Path $extractPath -Directory | Select-Object -First 1
         if ($sourceDir) {
             Copy-Item -Path "$($sourceDir.FullName)\*" -Destination $script:Apps.Nekobox.InstallPath -Recurse -Force
@@ -632,14 +927,17 @@ function Install-Nekobox {
 
         Write-Log "Nekobox installed to: $($script:Apps.Nekobox.InstallPath)" "Success"
 
-        # Clean up
+        Add-NekoboxDesktopShortcut
+        Add-NekoboxToTaskbar
+
         Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+
+        Write-Log "Nekobox installation completed successfully" "Success"
 
     } catch {
         Write-Log "Failed to extract/install Nekobox: $($_.Exception.Message)" "Error"
 
-        # Clean up on failure
         Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $extractPath -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -649,20 +947,99 @@ function Install-Nekobox {
     }
 }
 
+function Add-NekoboxDesktopShortcut {
+    Write-Log "Creating Nekobox desktop shortcut..." "Info"
+
+    try {
+        $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+        if (-not (Test-Path $nekoboxExe)) {
+            $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
+            if ($exeFiles.Count -gt 0) {
+                $nekoboxExe = $exeFiles[0].FullName
+            } else {
+                Write-Log "Nekobox executable not found for desktop shortcut" "Warning"
+                return
+            }
+        }
+
+        $desktopPath = $script:Config.DesktopPath
+        $shortcutPath = Join-Path $desktopPath "Nekobox.lnk"
+
+        $wshShell = New-Object -ComObject WScript.Shell
+        $shortcut = $wshShell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $nekoboxExe
+        $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+        $shortcut.Description = "Nekobox VPN Client"
+        $shortcut.IconLocation = $nekoboxExe
+        $shortcut.Save()
+
+        Write-Log "Desktop shortcut created: $shortcutPath" "Success"
+
+    } catch {
+        Write-Log "Failed to create desktop shortcut: $($_.Exception.Message)" "Warning"
+    }
+}
+
+function Add-NekoboxToTaskbar {
+    Write-Log "Pinning Nekobox to taskbar..." "Info"
+
+    try {
+        $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+        if (-not (Test-Path $nekoboxExe)) {
+            $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
+            if ($exeFiles.Count -gt 0) {
+                $nekoboxExe = $exeFiles[0].FullName
+            } else {
+                Write-Log "Nekobox executable not found for taskbar pinning" "Warning"
+                return
+            }
+        }
+
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.Namespace((Split-Path $nekoboxExe))
+        $item = $folder.ParseName((Split-Path $nekoboxExe -Leaf))
+
+        $verbs = $item.Verbs()
+        foreach ($verb in $verbs) {
+            if ($verb.Name -match "taskbar" -or $verb.Name -match "Pin") {
+                $verb.DoIt()
+                Write-Log "Nekobox pinned to taskbar" "Success"
+                return
+            }
+        }
+
+        $quickLaunchPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+        if (Test-Path $quickLaunchPath) {
+            $shortcutPath = Join-Path $quickLaunchPath "Nekobox.lnk"
+
+            $wshShell = New-Object -ComObject WScript.Shell
+            $shortcut = $wshShell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = $nekoboxExe
+            $shortcut.WorkingDirectory = $script:Apps.Nekobox.InstallPath
+            $shortcut.Description = "Nekobox VPN Client"
+            $shortcut.IconLocation = $nekoboxExe
+            $shortcut.Save()
+
+            Write-Log "Nekobox added to taskbar (alternative method)" "Success"
+        } else {
+            Write-Log "Could not pin Nekobox to taskbar" "Warning"
+        }
+
+    } catch {
+        Write-Log "Failed to pin Nekobox to taskbar: $($_.Exception.Message)" "Warning"
+    }
+}
+
 # ===================================================================
 # TESTING FUNCTIONS
 # ===================================================================
 
 function Invoke-SystemTest {
-    [CmdletBinding()]
-    param()
-
     Write-Host "=== System Installation Test ===" -ForegroundColor Yellow
     Write-Host ""
 
     $testResults = @()
 
-    # Test Python
     try {
         $pythonVersion = python --version 2>&1
         if ($LASTEXITCODE -eq 0) {
@@ -677,7 +1054,6 @@ function Invoke-SystemTest {
         $testResults += "Python: FAIL"
     }
 
-    # Test Chrome
     $chromeInstalled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
                       Where-Object { $_.DisplayName -like "*Google Chrome*" }
 
@@ -689,7 +1065,6 @@ function Invoke-SystemTest {
         $testResults += "Chrome: FAIL"
     }
 
-    # Test Nekobox
     if (Test-Path -Path $script:Apps.Nekobox.InstallPath) {
         $nekoboxFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
         if ($nekoboxFiles.Count -gt 0) {
@@ -704,7 +1079,6 @@ function Invoke-SystemTest {
         $testResults += "Nekobox: FAIL"
     }
 
-    # Summary
     Write-Host ""
     Write-Host "=== Test Results ===" -ForegroundColor Yellow
     $passCount = ($testResults | Where-Object { $_ -like "*PASS*" }).Count
@@ -721,18 +1095,14 @@ function Invoke-SystemTest {
 }
 
 function Test-GoogleDriveAccess {
-    [CmdletBinding()]
-    param()
-
     Write-Host "=== Testing Google Drive Access ===" -ForegroundColor Yellow
     Write-Host ""
 
     $downloader = [DownloadEngine]::new($script:Config.UserAgent, $script:Config.TempDir)
     $testPath = Join-Path $script:Config.TempDir "gdrive_test.tmp"
 
-    Write-Log "Testing Nekobox file ID: $($script:Apps.Nekobox.GoogleDriveID)" "Info"
+    Write-Log "Testing Nekobox file ID: $($script:GoogleDriveFiles.Nekobox)" "Info"
 
-    # Test Python availability
     try {
         $pythonVersion = python --version 2>&1
         if ($LASTEXITCODE -eq 0) {
@@ -746,31 +1116,25 @@ function Test-GoogleDriveAccess {
         return
     }
 
-    # Test gdown availability
     if (-not $downloader.EnsureGdown()) {
         Write-Log "gdown not available and could not be installed" "Error"
         return
     }
 
-    # Test download
-    if ($downloader.DownloadGoogleDriveFile($script:Apps.Nekobox.GoogleDriveID, $testPath)) {
+    if ($downloader.DownloadGoogleDriveFile($script:GoogleDriveFiles.Nekobox, $testPath)) {
         $fileSize = (Get-Item -Path $testPath).Length
         Write-Log "Test PASSED: Downloaded $([math]::Round($fileSize/1MB, 2)) MB successfully" "Success"
         Write-Log "File validation: PASS" "Success"
 
-        # Clean up
         Remove-Item -Path $testPath -Force -ErrorAction SilentlyContinue
         Write-Log "Test file cleaned up" "Info"
     } else {
         Write-Log "Test FAILED: Could not download file" "Error"
-        Write-Log "Check file permissions: https://drive.google.com/file/d/$($script:Apps.Nekobox.GoogleDriveID)/view" "Info"
+        Write-Log "Check file permissions: https://drive.google.com/file/d/$($script:GoogleDriveFiles.Nekobox)/view" "Info"
     }
 }
 
 function Invoke-Benchmark {
-    [CmdletBinding()]
-    param()
-
     Write-Host "=== Performance Benchmark ===" -ForegroundColor Yellow
     Write-Host ""
 
@@ -778,7 +1142,6 @@ function Invoke-Benchmark {
     $startMemory = [System.GC]::GetTotalMemory($false)
 
     try {
-        # Run Google Drive test as benchmark
         Test-GoogleDriveAccess
 
         $stopwatch.Stop()
@@ -790,7 +1153,6 @@ function Invoke-Benchmark {
         Write-Host "Memory Used: $([math]::Round(($endMemory - $startMemory) / 1MB, 2)) MB" -ForegroundColor White
         Write-Host "Script Version: $($script:Config.Version)" -ForegroundColor White
 
-        # Code metrics
         $scriptPath = $MyInvocation.ScriptName
         if ($scriptPath -and (Test-Path $scriptPath)) {
             $content = Get-Content $scriptPath
@@ -818,23 +1180,22 @@ function Invoke-Benchmark {
 # ===================================================================
 
 function Start-WindowsSetup {
-    [CmdletBinding()]
-    param()
-
     try {
-        # Initialize
         Initialize-Logging
 
-        # Show banner
         Write-Host ""
         Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║                    Windows Setup Script                     ║" -ForegroundColor Cyan
+        Write-Host "║                 Ultimate Windows Setup Script               ║" -ForegroundColor Cyan
         Write-Host "║              Chrome + Python + Nekobox Installer            ║" -ForegroundColor Cyan
-        Write-Host "║                   All-in-One Edition v$($script:Config.Version)                   ║" -ForegroundColor Cyan
+        Write-Host "║                   Enhanced Edition v$($script:Config.Version)                   ║" -ForegroundColor Cyan
         Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host ""
 
-        # Handle test modes
+        if ($ShowCurrentRegion) {
+            Show-CurrentRegionSettings
+            return
+        }
+
         if ($Test) {
             Invoke-SystemTest
             return
@@ -850,23 +1211,27 @@ function Start-WindowsSetup {
             return
         }
 
-        # Check prerequisites
         Test-Prerequisites
 
-        # Select region
         $selectedRegion = Select-UserRegion
 
-        # Show configuration
+        $selectedChromeVersion = $null
+        if (-not $SkipChrome) {
+            $selectedChromeVersion = Select-ChromeVersion
+        }
+
         Write-Host ""
         Write-Host "=== Windows Setup Configuration ===" -ForegroundColor Yellow
-        Write-Host "Region: $selectedRegion" -ForegroundColor Cyan
+        Write-Host "Region: $(if ($selectedRegion -eq 'Skip') { '🚫 Skipped' } else { $script:Regions[$selectedRegion].DisplayName })" -ForegroundColor Cyan
+        if (-not $SkipChrome -and $selectedChromeVersion) {
+            Write-Host "Chrome Version: $($script:GoogleDriveFiles.Chrome[$selectedChromeVersion].Name)" -ForegroundColor Cyan
+        }
         Write-Host "Skip Python: $SkipPython" -ForegroundColor Cyan
         Write-Host "Skip Chrome: $SkipChrome" -ForegroundColor Cyan
         Write-Host "Skip Nekobox: $SkipNekobox" -ForegroundColor Cyan
         Write-Host "Silent Mode: $Silent" -ForegroundColor Cyan
         Write-Host ""
 
-        # Confirm execution
         if (-not $Silent) {
             $confirm = Read-Host "Proceed with installation? (Y/N)"
             if ($confirm -notmatch '^[Yy]') {
@@ -875,21 +1240,21 @@ function Start-WindowsSetup {
             }
         }
 
-        # Initialize download engine
         $downloader = [DownloadEngine]::new($script:Config.UserAgent, $script:Config.TempDir)
 
         Write-Host ""
         Write-Host "=== Starting Installation Process ===" -ForegroundColor Green
 
-        # Execute installation steps
         if (-not $SkipPython) {
             Install-Python -Downloader $downloader
         }
 
-        Set-SystemRegion -Region $selectedRegion
+        if ($selectedRegion -ne "Skip") {
+            Set-SystemRegion -Region $selectedRegion
+        }
 
-        if (-not $SkipChrome) {
-            Install-Chrome -Downloader $downloader
+        if (-not $SkipChrome -and $selectedChromeVersion) {
+            Install-Chrome -Downloader $downloader -ChromeVersion $selectedChromeVersion
         }
 
         if (-not $SkipNekobox) {
@@ -900,49 +1265,89 @@ function Start-WindowsSetup {
         Write-Host "=== Installation Completed Successfully ===" -ForegroundColor Green
         Write-Log "All installations completed successfully" "Success"
 
-        # Show summary
         Write-Host ""
         Write-Host "=== Installation Summary ===" -ForegroundColor Yellow
-        Write-Host "System region: $selectedRegion" -ForegroundColor White
+
+        if ($selectedRegion -ne "Skip") {
+            Write-Host "🌍 System Region: $($script:Regions[$selectedRegion].DisplayName)" -ForegroundColor Green
+            Write-Host "   Language: $($script:Regions[$selectedRegion].Language)" -ForegroundColor White
+            Write-Host "   Timezone: $($script:Regions[$selectedRegion].Timezone)" -ForegroundColor White
+            Write-Host "   Currency: $($script:Regions[$selectedRegion].Currency)" -ForegroundColor White
+        } else {
+            Write-Host "🌍 System Region: Skipped" -ForegroundColor Yellow
+        }
 
         if (-not $SkipPython) {
             try {
                 $pythonVersion = python --version 2>&1
                 if ($LASTEXITCODE -eq 0) {
-                    Write-Host "Python: $pythonVersion" -ForegroundColor Green
+                    Write-Host "🐍 Python: $pythonVersion" -ForegroundColor Green
+
+                    python -c "import gdown" 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "   gdown: Available for Google Drive downloads" -ForegroundColor White
+                    }
                 } else {
-                    Write-Host "Python: Installation may have failed" -ForegroundColor Red
+                    Write-Host "🐍 Python: Installation may have failed" -ForegroundColor Red
                 }
             } catch {
-                Write-Host "Python: Installation may have failed" -ForegroundColor Red
+                Write-Host "🐍 Python: Installation may have failed" -ForegroundColor Red
             }
+        } else {
+            Write-Host "🐍 Python: Skipped" -ForegroundColor Yellow
         }
 
         if (-not $SkipChrome) {
             $chromeInstalled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
                               Where-Object { $_.DisplayName -like "*Google Chrome*" }
             if ($chromeInstalled) {
-                Write-Host "Chrome: Installed ($($chromeInstalled.DisplayVersion))" -ForegroundColor Green
+                Write-Host "🌐 Chrome: $($chromeInstalled.DisplayVersion)" -ForegroundColor Green
+                Write-Host "   Updates: Blocked comprehensively" -ForegroundColor White
+                Write-Host "   Taskbar: Pinned" -ForegroundColor White
+
+                $chromePaths = @(
+                    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+                    "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+                )
+                $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+                if ($chromeFound) {
+                    Write-Host "   Location: $chromeFound" -ForegroundColor White
+                } else {
+                    Write-Host "   Warning: Chrome executable not found in standard locations" -ForegroundColor Yellow
+                }
             } else {
-                Write-Host "Chrome: Installation may have failed" -ForegroundColor Red
+                Write-Host "🌐 Chrome: Installation may have failed" -ForegroundColor Red
             }
+        } else {
+            Write-Host "🌐 Chrome: Skipped" -ForegroundColor Yellow
         }
 
         if (-not $SkipNekobox) {
             if (Test-Path -Path $script:Apps.Nekobox.InstallPath) {
                 $nekoboxFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
                 if ($nekoboxFiles.Count -gt 0) {
-                    Write-Host "Nekobox: Installed ($($nekoboxFiles.Count) executables)" -ForegroundColor Green
+                    Write-Host "🔒 Nekobox: Installed ($($nekoboxFiles.Count) executables)" -ForegroundColor Green
+                    Write-Host "   Location: $($script:Apps.Nekobox.InstallPath)" -ForegroundColor White
+                    Write-Host "   Desktop Shortcut: Created" -ForegroundColor White
+                    Write-Host "   Taskbar: Pinned" -ForegroundColor White
+
+                    $mainExe = $nekoboxFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
+                    if ($mainExe) {
+                        Write-Host "   Main Executable: $($mainExe.Name)" -ForegroundColor White
+                    }
                 } else {
-                    Write-Host "Nekobox: Installation may have failed" -ForegroundColor Red
+                    Write-Host "🔒 Nekobox: Installation may have failed (no executables found)" -ForegroundColor Red
                 }
             } else {
-                Write-Host "Nekobox: Installation may have failed" -ForegroundColor Red
+                Write-Host "🔒 Nekobox: Installation may have failed (directory not found)" -ForegroundColor Red
             }
+        } else {
+            Write-Host "🔒 Nekobox: Skipped" -ForegroundColor Yellow
         }
 
         Write-Host ""
-        Write-Host "Log file: $($script:Config.LogFile)" -ForegroundColor Cyan
+        Write-Host "📋 Log file: $($script:Config.LogFile)" -ForegroundColor Cyan
+        Write-Host "🎉 Setup completed! Some changes may require a restart to take full effect." -ForegroundColor Green
 
     } catch {
         Write-Host ""
@@ -964,7 +1369,6 @@ function Start-WindowsSetup {
 # SCRIPT ENTRY POINT
 # ===================================================================
 
-# Start the setup if not dot-sourced
 if ($MyInvocation.InvocationName -ne '.') {
     Start-WindowsSetup
 }
