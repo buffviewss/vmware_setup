@@ -65,6 +65,82 @@ $script:Apps = @{
 # UTILITY FUNCTIONS
 # ===================================================================
 
+function Get-ChromeExecutablePath {
+    $chromePaths = @(
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
+        "$env:LocalAppData\Google\Chrome\Application\chrome.exe",
+        "$env:UserProfile\AppData\Local\Google\Chrome\Application\chrome.exe"
+    )
+
+    $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if (-not $chromeExe) {
+        # Try registry lookup
+        $registryPaths = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+        )
+
+        foreach ($regPath in $registryPaths) {
+            if (Test-Path $regPath) {
+                $regChromePath = (Get-ItemProperty -Path $regPath -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
+                if ($regChromePath -and (Test-Path $regChromePath)) {
+                    return $regChromePath
+                }
+            }
+        }
+
+        # Try directory search as last resort
+        $googleDirs = @(
+            "$env:ProgramFiles\Google",
+            "$env:ProgramFiles(x86)\Google",
+            "$env:LocalAppData\Google"
+        )
+        foreach ($dir in $googleDirs) {
+            if (Test-Path $dir) {
+                $foundExe = Get-ChildItem -Path $dir -Filter "chrome.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($foundExe) {
+                    return $foundExe.FullName
+                }
+            }
+        }
+    }
+
+    return $chromeExe
+}
+
+function Get-NekoboxExecutablePath {
+    $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+
+    if (-not (Test-Path $nekoboxExe)) {
+        $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
+        if ($exeFiles.Count -gt 0) {
+            $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
+            $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
+        }
+    }
+
+    return $nekoboxExe
+}
+
+function Get-ChromeInstallationInfo {
+    $chromeRegistryPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+
+    foreach ($regPath in $chromeRegistryPaths) {
+        $chromeInstalled = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue |
+                          Where-Object { $_.DisplayName -like "*Google Chrome*" } | Select-Object -First 1
+        if ($chromeInstalled) {
+            return $chromeInstalled
+        }
+    }
+
+    return $null
+}
+
 function Write-Log {
     [CmdletBinding()]
     param(
@@ -191,12 +267,29 @@ class DownloadEngine {
         foreach ($method in $methods) {
             try {
                 Write-Log "Trying gdown method..." "Info"
-                python -c $method 2>&1 | Out-Null
-                
+
+                # Use Start-Process with timeout to prevent hanging
+                $null = Start-Process -FilePath "python" -ArgumentList "-c", $method -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gdown_output.txt" -RedirectStandardError "$env:TEMP\gdown_error.txt"
+
+                # Check if download completed successfully
                 if ((Test-Path -Path $outputPath) -and (Get-Item -Path $outputPath).Length -gt 10240) {
                     $fileSize = (Get-Item -Path $outputPath).Length
                     Write-Log "gdown download successful: $([math]::Round($fileSize/1MB, 2)) MB" "Success"
+
+                    # Clean up temp files
+                    @("$env:TEMP\gdown_output.txt", "$env:TEMP\gdown_error.txt") | ForEach-Object {
+                        Remove-Item $_ -Force -ErrorAction SilentlyContinue
+                    }
+
                     return $true
+                } else {
+                    # Log error details if available
+                    if (Test-Path "$env:TEMP\gdown_error.txt") {
+                        $errorContent = Get-Content "$env:TEMP\gdown_error.txt" -Raw -ErrorAction SilentlyContinue
+                        if ($errorContent) {
+                            Write-Log "gdown error: $($errorContent.Substring(0, [Math]::Min(100, $errorContent.Length)))" "Warning"
+                        }
+                    }
                 }
             } catch {
                 Write-Log "gdown method failed: $($_.Exception.Message)" "Warning"
@@ -208,23 +301,27 @@ class DownloadEngine {
     
     [bool] EnsureGdown() {
         try {
-            python -c "import gdown" 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            # Check if gdown is available with timeout
+            $checkProcess = Start-Process -FilePath "python" -ArgumentList "-c", "import gdown" -Wait -PassThru -WindowStyle Hidden -RedirectStandardError "$env:TEMP\gdown_check.txt"
+
+            if ($checkProcess.ExitCode -eq 0) {
                 Write-Log "gdown is available" "Success"
+                Remove-Item "$env:TEMP\gdown_check.txt" -Force -ErrorAction SilentlyContinue
                 return $true
             }
-            
+
             Write-Log "Installing gdown..." "Info"
-            python -m pip install gdown --quiet 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            $installProcess = Start-Process -FilePath "python" -ArgumentList "-m", "pip", "install", "gdown", "--quiet" -Wait -PassThru -WindowStyle Hidden
+
+            if ($installProcess.ExitCode -eq 0) {
                 Write-Log "gdown installed successfully" "Success"
                 return $true
             } else {
-                Write-Log "Failed to install gdown" "Error"
+                Write-Log "Failed to install gdown (exit code: $($installProcess.ExitCode))" "Error"
                 return $false
             }
         } catch {
-            Write-Log "Python not available" "Error"
+            Write-Log "Python not available: $($_.Exception.Message)" "Error"
             return $false
         }
     }
@@ -632,67 +729,13 @@ function Add-ChromeToTaskbar {
     Write-Log "Pinning Chrome to taskbar..." "Info"
 
     try {
-        # Enhanced Chrome executable detection with multiple methods
-        $chromePaths = @(
-            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-            "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
-            "$env:LocalAppData\Google\Chrome\Application\chrome.exe",
-            "$env:UserProfile\AppData\Local\Google\Chrome\Application\chrome.exe"
-        )
-
-        $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-        # If not found in standard paths, try registry detection
-        if (-not $chromeExe) {
-            try {
-                $registryPaths = @(
-                    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-                    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
-                )
-
-                foreach ($regPath in $registryPaths) {
-                    if (Test-Path $regPath) {
-                        $regChromePath = (Get-ItemProperty -Path $regPath -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
-                        if ($regChromePath -and (Test-Path $regChromePath)) {
-                            $chromeExe = $regChromePath
-                            break
-                        }
-                    }
-                }
-            } catch {
-                # Continue to search method
-            }
-        }
-
-        # If still not found, search in Google directories
-        if (-not $chromeExe) {
-            try {
-                $googleDirs = @(
-                    "$env:ProgramFiles\Google",
-                    "$env:ProgramFiles(x86)\Google",
-                    "$env:LocalAppData\Google"
-                )
-
-                foreach ($dir in $googleDirs) {
-                    if (Test-Path $dir) {
-                        $foundExe = Get-ChildItem -Path $dir -Filter "chrome.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                        if ($foundExe) {
-                            $chromeExe = $foundExe.FullName
-                            break
-                        }
-                    }
-                }
-            } catch {
-                # Continue
-            }
-        }
+        $chromeExe = Get-ChromeExecutablePath
 
         # Final wait and retry for fresh installations
         if (-not $chromeExe) {
             Write-Log "Chrome executable not immediately found, waiting for installation to complete..." "Info"
             Start-Sleep -Seconds 10
-
-            $chromeExe = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            $chromeExe = Get-ChromeExecutablePath
         }
 
         if (-not $chromeExe) {
@@ -863,12 +906,7 @@ function Install-Chrome {
                 Start-Sleep -Seconds 10
 
                 # Check if Chrome was actually installed despite non-zero exit code
-                $chromePaths = @(
-                    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-                    "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
-                )
-
-                $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+                $chromeFound = Get-ChromeExecutablePath
 
                 if ($chromeFound) {
                     $installSuccess = $true
@@ -1020,17 +1058,11 @@ function Set-NekoboxAutoStart {
 
     try {
         # Find the main Nekobox executable
-        $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+        $nekoboxExe = Get-NekoboxExecutablePath
 
-        if (-not (Test-Path $nekoboxExe)) {
-            $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
-            if ($exeFiles.Count -gt 0) {
-                $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
-                $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
-            } else {
-                Write-Log "Nekobox executable not found for auto-start configuration" "Warning"
-                return
-            }
+        if (-not $nekoboxExe -or -not (Test-Path $nekoboxExe)) {
+            Write-Log "Nekobox executable not found for auto-start configuration" "Warning"
+            return
         }
 
         # Add to Windows startup registry (current user)
@@ -1074,17 +1106,11 @@ function Add-NekoboxDesktopShortcut {
 
     try {
         # Direct executable execution as requested by user (no batch launcher)
-        $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
+        $nekoboxExe = Get-NekoboxExecutablePath
 
-        if (-not (Test-Path $nekoboxExe)) {
-            $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
-            if ($exeFiles.Count -gt 0) {
-                $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
-                $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
-            } else {
-                Write-Log "Nekobox executable not found for desktop shortcut" "Warning"
-                return
-            }
+        if (-not $nekoboxExe -or -not (Test-Path $nekoboxExe)) {
+            Write-Log "Nekobox executable not found for desktop shortcut" "Warning"
+            return
         }
 
         $desktopPath = $script:Config.DesktopPath
@@ -1111,17 +1137,11 @@ function Add-NekoboxToTaskbar {
     Write-Log "Pinning Nekobox to taskbar..." "Info"
 
     try {
-        $nekoboxExe = Join-Path $script:Apps.Nekobox.InstallPath $script:Apps.Nekobox.ExecutableName
-        if (-not (Test-Path $nekoboxExe)) {
-            $exeFiles = Get-ChildItem -Path $script:Apps.Nekobox.InstallPath -Filter "*.exe" -ErrorAction SilentlyContinue
-            if ($exeFiles.Count -gt 0) {
-                # Prefer nekoray.exe or nekobox.exe
-                $preferredExe = $exeFiles | Where-Object { $_.Name -like "*nekoray*" -or $_.Name -like "*nekobox*" } | Select-Object -First 1
-                $nekoboxExe = if ($preferredExe) { $preferredExe.FullName } else { $exeFiles[0].FullName }
-            } else {
-                Write-Log "Nekobox executable not found for taskbar pinning" "Warning"
-                return
-            }
+        $nekoboxExe = Get-NekoboxExecutablePath
+
+        if (-not $nekoboxExe -or -not (Test-Path $nekoboxExe)) {
+            Write-Log "Nekobox executable not found for taskbar pinning" "Warning"
+            return
         }
 
         # Method 1: Try COM approach
@@ -1209,8 +1229,7 @@ function Invoke-SystemTest {
         $testResults += "Python: FAIL"
     }
 
-    $chromeInstalled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
-                      Where-Object { $_.DisplayName -like "*Google Chrome*" }
+    $chromeInstalled = Get-ChromeInstallationInfo
 
     if ($chromeInstalled) {
         Write-Log "Chrome: Installed ($($chromeInstalled.DisplayVersion))" "Success"
@@ -1425,10 +1444,11 @@ function Start-WindowsSetup {
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host "🐍 Python: $pythonVersion" -ForegroundColor Green
 
-                    python -c "import gdown" 2>&1 | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
+                    $gdownCheck = Start-Process -FilePath "python" -ArgumentList "-c", "import gdown" -Wait -PassThru -WindowStyle Hidden -RedirectStandardError "$env:TEMP\gdown_summary_check.txt"
+                    if ($gdownCheck.ExitCode -eq 0) {
                         Write-Host "   gdown: Available for Google Drive downloads" -ForegroundColor White
                     }
+                    Remove-Item "$env:TEMP\gdown_summary_check.txt" -Force -ErrorAction SilentlyContinue
                 } else {
                     Write-Host "🐍 Python: Installation may have failed" -ForegroundColor Red
                 }
@@ -1441,72 +1461,10 @@ function Start-WindowsSetup {
 
         if (-not $SkipChrome) {
             # Check multiple locations for Chrome installation
-            $chromeInstalled = $null
-            $chromeRegistryPaths = @(
-                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
-            )
-
-            foreach ($regPath in $chromeRegistryPaths) {
-                $chromeInstalled = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue |
-                                  Where-Object { $_.DisplayName -like "*Google Chrome*" } | Select-Object -First 1
-                if ($chromeInstalled) { break }
-            }
+            $chromeInstalled = Get-ChromeInstallationInfo
 
             # Enhanced Chrome executable detection with multiple methods
-            $chromePaths = @(
-                "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-                "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
-                "$env:LocalAppData\Google\Chrome\Application\chrome.exe",
-                "$env:UserProfile\AppData\Local\Google\Chrome\Application\chrome.exe"
-            )
-            $chromeFound = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-            # If not found in standard paths, try registry detection
-            if (-not $chromeFound) {
-                try {
-                    $registryPaths = @(
-                        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-                        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
-                    )
-
-                    foreach ($regPath in $registryPaths) {
-                        if (Test-Path $regPath) {
-                            $regChromePath = (Get-ItemProperty -Path $regPath -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
-                            if ($regChromePath -and (Test-Path $regChromePath)) {
-                                $chromeFound = $regChromePath
-                                break
-                            }
-                        }
-                    }
-                } catch {
-                    # Continue to search method
-                }
-            }
-
-            # If still not found, search in Google directories
-            if (-not $chromeFound) {
-                try {
-                    $googleDirs = @(
-                        "$env:ProgramFiles\Google",
-                        "$env:ProgramFiles(x86)\Google",
-                        "$env:LocalAppData\Google"
-                    )
-
-                    foreach ($dir in $googleDirs) {
-                        if (Test-Path $dir) {
-                            $foundExe = Get-ChildItem -Path $dir -Filter "chrome.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                            if ($foundExe) {
-                                $chromeFound = $foundExe.FullName
-                                break
-                            }
-                        }
-                    }
-                } catch {
-                    # Continue
-                }
-            }
+            $chromeFound = Get-ChromeExecutablePath
 
             if ($chromeInstalled -or $chromeFound) {
                 $version = if ($chromeInstalled) { $chromeInstalled.DisplayVersion } else { "Installed" }
