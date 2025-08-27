@@ -1,0 +1,24 @@
+port: 7890
+socks-port: 7891
+mode: global
+allow-lan: false
+log-level: info
+
+proxies:
+  - name: My-SOCKS5
+    type: socks5
+    server: 217.177.34.19
+    port: 6012
+    username: eyvizq4mf8n3
+    password: 6jo0C8dNSfrtkclt
+    udp: true
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - My-SOCKS5
+      - DIRECT
+
+rules:
+  - MATCH,Proxy
