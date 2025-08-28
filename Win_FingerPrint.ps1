@@ -10,8 +10,8 @@ Script này sẽ:
 Yêu cầu: Chạy PowerShell với quyền Administrator
 #>
 
-# Đường dẫn file log
-$logFile = "$env:TEMP\WinFingerPrint.log"
+# Đường dẫn file log (lưu ở thư mục Download của user)
+$logFile = [System.IO.Path]::Combine([Environment]::GetFolderPath('UserProfile'), 'Downloads', 'WinFingerPrint.log')
 
 Function Write-Log {
     param([string]$msg)
