@@ -1,1524 +1,618 @@
 <#
-.SYNOPSIS
-    Human-grade, real system font changer for Windows 10 — v3.1
-    
-.DESCRIPTION
-    Production-ready font fingerprinting tool with robust network handling, caching, and logging.
-    Features: One-click defaults, random real installs, Unicode coverage, network retry with backoff,
-    persistent cache, human-like jitter, structured logging.
-    
-    Key behaviors:
-    - True install through Fonts Shell (no fake JS/extension)
-    - Random Google families (Google catalog → GitHub OFL → jsDelivr fallback)
-    - Unicode coverage via Noto fonts with FontLink prepending
-    - Chrome/Edge profile updates, font cache refresh, Explorer restart
-    
-.PARAMETER FontsPerRun
-    Number of font families to install (1-3). Default: random 2 or 3
-    
-.PARAMETER IncludeMonospace
-    Include monospace fonts in selection. Default: $true
-    
-.PARAMETER Cleanup
-    Remove temporary files after completion. Default: $true
-    
-.PARAMETER NoRestartExplorer
-    Skip Explorer restart after font changes
-    
-.PARAMETER RestoreDefault
-    Restore system fonts to Windows defaults
-    
-.PARAMETER UseSystemProxy
-    Use system proxy settings for downloads
-    
-.PARAMETER ProxyUrl
-    Custom proxy URL for downloads
-    
-.PARAMETER ProxyCredential
-    Proxy authentication credentials
-    
-.PARAMETER LocalFolder
-    Local folder containing font files to install
-    
-.PARAMETER ExtraUrls
-    Additional URLs to try for font downloads
-    
-.PARAMETER NoSymbolSubstitute
-    Skip mapping Segoe UI Symbol to coverage fonts
+Human-grade, real system font changer for Windows 10 — v3.1
+(One-click defaults; random real installs; Unicode hash impact; robust network + caching + logs)
+
+What’s new vs v3.0 (patch set 1,3,4,5,6,7):
+1) Add 'Comic Sans MS' and 'Impact' to FontLink bases (BrowserLeaks cursive/fantasy).
+3) Robust network: retry with backoff around HTTP ops.
+4) Persistent cache: %ProgramData%\FontRealCache for ZIP/TTF/OTF so later runs are faster/offline-friendly.
+5) Human-like jitter sleeps around network/registry ops.
+6) If user doesn't pass FontsPerRun, randomly pick 2 or 3 (natural variability).
+7) Structured logging to %ProgramData%\FontReal\logs\YYYYMMDD-HHMMSS.log
+
+Other key behaviors kept:
+- True install through Fonts Shell, no JS/extension fake.
+- Random Google families each run (Google catalog ➜ GitHub OFL ➜ jsDelivr data fallback).
+- Ensure Unicode Glyphs changes: install a coverage family (Noto Sans/Serif/Symbols 2/1), prepend FontLink (incl. Segoe UI Symbol), and map 'Segoe UI Symbol' to coverage by default.
+- Update Chrome/Edge default fonts for every profile; refresh Windows Font Cache; restart Explorer.
 #>
 
 [CmdletBinding()]
 param(
-    [ValidateSet(1,2,3)]
-    [int]$FontsPerRun = 3,
-    [switch]$IncludeMonospace,
-    [switch]$Cleanup,
-    [switch]$NoRestartExplorer,
-    [switch]$RestoreDefault,
-    [switch]$UseSystemProxy,
-    [string]$ProxyUrl,
-    [System.Management.Automation.PSCredential]$ProxyCredential,
-    [string]$LocalFolder,
-    [string[]]$ExtraUrls,
-    [switch]$NoSymbolSubstitute
+  [ValidateSet(1,2,3)]
+  [int]$FontsPerRun = 3,
+  [switch]$IncludeMonospace,
+  [switch]$Cleanup,
+  [switch]$NoRestartExplorer,
+  [switch]$RestoreDefault,
+  [switch]$UseSystemProxy,
+  [string]$ProxyUrl,
+  [System.Management.Automation.PSCredential]$ProxyCredential,
+  [string]$LocalFolder,
+  [string[]]$ExtraUrls,
+  [switch]$NoSymbolSubstitute
 )
 
-#region Configuration and Constants
+# ---- One-click defaults if user runs with no args ----
+if(-not $PSBoundParameters.ContainsKey('IncludeMonospace')) { $IncludeMonospace = $true }
+if(-not $PSBoundParameters.ContainsKey('Cleanup')) { $Cleanup = $true }
+if(-not $PSBoundParameters.ContainsKey('FontsPerRun')) { $FontsPerRun = Get-Random -InputObject @(2,3) }
 
-# Apply one-click defaults for unspecified parameters
-if (-not $PSBoundParameters.ContainsKey('IncludeMonospace')) { $IncludeMonospace = $true }
-if (-not $PSBoundParameters.ContainsKey('Cleanup')) { $Cleanup = $true }
-if (-not $PSBoundParameters.ContainsKey('FontsPerRun')) { $FontsPerRun = Get-Random -InputObject @(2,3) }
-
-# Font family constants
-$script:CoverageFamilies = @('Noto Sans', 'Noto Serif', 'Noto Sans Symbols 2', 'Noto Sans Symbols')
-$script:BaseFamiliesToAugment = @(
-    'Segoe UI', 'Arial', 'Times New Roman', 'Courier New', 'Microsoft Sans Serif',
-    'Segoe UI Symbol', 'Comic Sans MS', 'Impact'
+# --------------------------- CONSTS ---------------------------
+$CoverageFamilies = @('Noto Sans','Noto Serif','Noto Sans Symbols 2','Noto Sans Symbols')
+$BaseFamiliesToAugment = @(
+  'Segoe UI','Arial','Times New Roman','Courier New','Microsoft Sans Serif',
+  'Segoe UI Symbol','Comic Sans MS','Impact' # (1) add cursive/fantasy bases BL uses
 )
 
-# Network and retry constants
-$script:NetworkRetryCount = 3
-$script:NetworkBaseDelayMs = 500
-$script:HttpTimeoutMinutes = 8
-$script:JitterMinMs = 200
-$script:JitterMaxMs = 900
-$script:MaxFontFilesPerFamily = 6
-$script:MaxUiFontFiles = 8
-$script:MinValidFontSizeBytes = 10000
-$script:MinValidZipSizeBytes = 200
+# --------------------------- PATHS & LOG ---------------------------
+$TempRoot    = Join-Path -Path $env:TEMP -ChildPath ("FontInstall-" + (Get-Date -Format yyyyMMdd-HHmmss))
+$BackupDir   = Join-Path -Path $TempRoot -ChildPath "RegistryBackup"
+$ExtractRoot = Join-Path -Path $TempRoot -ChildPath "unzipped"
+$CacheDir    = Join-Path -Path $env:ProgramData -ChildPath "FontRealCache"   # (4) persistent cache
+$LogDir      = Join-Path -Path $env:ProgramData -ChildPath "FontReal\logs"   # (7) logs
+$LogFile     = Join-Path -Path $LogDir -ChildPath ("run-" + (Get-Date -Format yyyyMMdd-HHmmss) + ".log")
 
-# Path configuration
-$script:TempRoot = Join-Path -Path $env:TEMP -ChildPath ("FontInstall-" + (Get-Date -Format yyyyMMdd-HHmmss))
-$script:BackupDir = Join-Path -Path $script:TempRoot -ChildPath "RegistryBackup"
-$script:ExtractRoot = Join-Path -Path $script:TempRoot -ChildPath "unzipped"
-$script:CacheDir = Join-Path -Path $env:ProgramData -ChildPath "FontRealCache"
-$script:LogDir = Join-Path -Path $env:ProgramData -ChildPath "FontReal\logs"
-$script:LogFile = Join-Path -Path $script:LogDir -ChildPath ("run-" + (Get-Date -Format yyyyMMdd-HHmmss) + ".log")
+# --------------------------- HELPERS: ENV ---------------------------
+function Assert-Admin {
+  $id=[Security.Principal.WindowsIdentity]::GetCurrent()
+  $p =New-Object Security.Principal.WindowsPrincipal($id)
+  if(-not $p.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)){
+    throw "Please run PowerShell as Administrator."
+  }
+}
+function Ensure-Dirs {
+  foreach($d in @($TempRoot,$BackupDir,$ExtractRoot,$CacheDir,$LogDir)){
+    if(-not(Test-Path $d)){ New-Item -ItemType Directory -Path $d | Out-Null }
+  }
+}
+function Ensure-Tls12 { try{ [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol } catch {} }
 
-# Global state for jsDelivr API cache
+function Write-Log {
+  param([string]$Msg)
+  $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+  $line = "[{0}] {1}" -f $ts, $Msg
+  Write-Host $line
+  try{ Add-Content -Path $LogFile -Value $line } catch {}
+}
+
+function Jitter { param([int]$Min=200,[int]$Max=900) Start-Sleep -Milliseconds (Get-Random -Min $Min -Max $Max) } # (5)
+
+# (3) Retry helper
+function Invoke-WithRetry {
+  param([scriptblock]$Action,[int]$Times=3,[int]$BaseDelayMs=500)
+  for($i=1;$i -le $Times;$i++){
+    try{ return & $Action } catch {
+      if($i -eq $Times){ throw }
+      Start-Sleep -Milliseconds ($BaseDelayMs * [math]::Pow(2, $i-1))
+    }
+  }
+}
+
+function New-HttpClient {
+  param([string]$Accept="*/*",[string]$Referer="")
+  Ensure-Tls12
+  Add-Type -AssemblyName System.Net.Http
+  $handler = New-Object System.Net.Http.HttpClientHandler
+  $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+  $handler.AllowAutoRedirect = $true
+  if($ProxyUrl){
+    $wp = New-Object System.Net.WebProxy($ProxyUrl,$true)
+    if($ProxyCredential){ $wp.Credentials = $ProxyCredential.GetNetworkCredential() } else { $wp.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials }
+    $handler.UseProxy = $true; $handler.Proxy = $wp
+  } elseif($UseSystemProxy){
+    $handler.UseProxy = $true; $handler.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+    if($handler.Proxy){ $handler.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials }
+  } else { $handler.UseProxy = $false }
+  $client = New-Object System.Net.Http.HttpClient($handler)
+  $client.Timeout = [TimeSpan]::FromMinutes(8)
+  $client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell")
+  $client.DefaultRequestHeaders.Accept.ParseAdd($Accept)
+  if($Referer){ $client.DefaultRequestHeaders.Referrer = [Uri]$Referer }
+  return $client
+}
+function Download-HttpClient {
+  param([string]$Url,[string]$OutFile,[string]$Accept="*/*",[string]$Referer="")
+  Invoke-WithRetry -Times 3 -Action {
+    $client = New-HttpClient -Accept $Accept -Referer $Referer
+    try{
+      $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+      if(-not $resp.IsSuccessStatusCode){ throw ("HTTP {0} {1}" -f [int]$resp.StatusCode, $resp.ReasonPhrase) }
+      $in  = $resp.Content.ReadAsStreamAsync().Result
+      $out = [System.IO.File]::Open($OutFile,[System.IO.FileMode]::Create,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None)
+      try { $in.CopyTo($out) } finally { $out.Close(); $in.Close(); $client.Dispose() }
+    } catch { $client.Dispose(); throw }
+  }
+}
+
+function Get-String {
+  param([string]$Url,[string]$Accept="*/*",[string]$Referer="")
+  Invoke-WithRetry -Times 3 -Action {
+    $client = New-HttpClient -Accept $Accept -Referer $Referer
+    try{ return $client.GetStringAsync($Url).Result } catch { $client.Dispose(); throw } finally { $client.Dispose() }
+  }
+}
+
+# --------------------------- CACHE (4) ---------------------------
+function Get-CachedOrDownload {
+  param([string]$Url,[string]$PreferredName,[string]$Accept="*/*",[string]$Referer="")
+  $name = $PreferredName
+  if(-not $name -or $name.Trim().Length -eq 0){
+    try{ $name = [System.IO.Path]::GetFileName([Uri]$Url) } catch { $name = [Guid]::NewGuid().ToString() }
+  }
+  $cachePath = Join-Path $CacheDir $name
+  if(Test-Path $cachePath){
+    Write-Log ("Cache hit: {0}" -f $name)
+  } else {
+    Write-Log ("Cache miss, downloading: {0}" -f $Url)
+    Download-HttpClient -Url $Url -OutFile $cachePath -Accept $Accept -Referer $Referer
+  }
+  return $cachePath
+}
+
+# --------------------------- ZIP/FILES ---------------------------
+function Test-ZipFileValid {
+  param([string]$ZipPath)
+  if(-not(Test-Path $ZipPath)){ return $false }
+  $fi = Get-Item $ZipPath -ErrorAction SilentlyContinue
+  if(-not $fi -or $fi.Length -lt 200){ return $false }
+  $fs=[System.IO.File]::Open($ZipPath,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite)
+  try{ $b = New-Object byte[] 2; $null = $fs.Read($b,0,2); if($b[0]-ne 0x50 -or $b[1]-ne 0x4B){ return $false } } finally { $fs.Close() }
+  try{
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $stream=[System.IO.File]::OpenRead($ZipPath)
+    try{ $zip=New-Object System.IO.Compression.ZipArchive($stream,[System.IO.Compression.ZipArchiveMode]::Read,$false); $null=$zip.Entries.Count; $zip.Dispose() }
+    finally{ $stream.Dispose() }
+    return $true
+  } catch { return $false }
+}
+function Expand-Zip {
+  param([string]$ZipPath,[string]$OutDir)
+  if(Test-Path $OutDir){ Remove-Item -Recurse -Force $OutDir -ErrorAction SilentlyContinue }
+  New-Item -ItemType Directory -Path $OutDir | Out-Null
+  try{ Expand-Archive -Path $ZipPath -DestinationPath $OutDir -Force } catch {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath,$OutDir)
+  }
+}
+
+# --------------------------- GOOGLE CATALOG ---------------------------
+function Get-GF-CatalogFamilies {
+  $raw = Get-String -Url "https://fonts.google.com/metadata/fonts" -Accept "application/json" -Referer "https://fonts.google.com/"
+  if([string]::IsNullOrWhiteSpace($raw)){ return @() }
+  $trim = $raw.Trim(); if($trim.StartsWith(")]}'")){ $trim = $trim.Substring(4) }
+  try{ ($trim | ConvertFrom-Json).familyMetadataList.family | Select-Object -Unique } catch { @() }
+}
+function Pick-Random-Families {
+  param([int]$Count,[switch]$WantMono)
+  $names = Get-GF-CatalogFamilies
+  if(-not $names -or $names.Count -eq 0){ return @() }
+  $r = New-Object System.Random
+  $pick = New-Object System.Collections.Generic.List[string]
+  if($WantMono){
+    $mono = ($names | Where-Object { $_ -match '(?i)Mono|Code' } | Sort-Object { $r.Next() } | Select-Object -First 1)
+    if($mono){ $pick.Add($mono) | Out-Null }
+  }
+  while($pick.Count -lt $Count){
+    $cand = ($names | Sort-Object { $r.Next() } | Select-Object -First 1)
+    if($pick -notcontains $cand){ $pick.Add($cand) | Out-Null }
+  }
+  ,$pick.ToArray()
+}
+function Get-GoogleZipUrl { param([string]$FamilyName) $enc=[Uri]::EscapeDataString($FamilyName); "https://fonts.google.com/download?family=$enc" }
+
+# --------------------------- GitHub/jsDelivr OFL fallbacks ---------------------------
+function Get-GF-OFL-Dirs-GitHub {
+  param([int]$MaxPages=6)
+  $all = New-Object System.Collections.Generic.List[string]
+  for($page=1; $page -le $MaxPages; $page++){
+    $api = "https://api.github.com/repos/google/fonts/contents/ofl?page=$page&per_page=100"
+    $raw = Get-String -Url $api -Accept "application/vnd.github+json"
+    if([string]::IsNullOrWhiteSpace($raw)){ break }
+    $json = $raw | ConvertFrom-Json
+    $dirs = $json | Where-Object { $_.type -eq 'dir' } | ForEach-Object { $_.name }
+    if(-not $dirs -or $dirs.Count -eq 0){ break }
+    $dirs | ForEach-Object { $all.Add($_) | Out-Null }
+  }
+  $all.ToArray()
+}
 $global:JsDelivrFlat = $null
-
-#endregion
-
-#region Core Utility Functions
-
-function Assert-AdminPrivileges {
-    <#
-    .SYNOPSIS
-        Ensures the script is running with Administrator privileges
-    #>
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
-        throw "Please run PowerShell as Administrator."
-    }
+function Ensure-JsDelivrFlat {
+  if($global:JsDelivrFlat -ne $null){ return }
+  $raw = Get-String -Url "https://data.jsdelivr.com/v1/package/gh/google/fonts@main/flat" -Accept "application/json"
+  if(-not [string]::IsNullOrWhiteSpace($raw)){ $global:JsDelivrFlat = $raw | ConvertFrom-Json } else { $global:JsDelivrFlat = @{} }
 }
-
-function Initialize-RequiredDirectories {
-    <#
-    .SYNOPSIS
-        Creates all required directories for the script operation
-    #>
-    $directories = @($script:TempRoot, $script:BackupDir, $script:ExtractRoot, $script:CacheDir, $script:LogDir)
-    foreach ($directory in $directories) {
-        if (-not (Test-Path $directory)) {
-            New-Item -ItemType Directory -Path $directory | Out-Null
-        }
-    }
+function Get-GF-OFL-Dirs-JsDelivr {
+  Ensure-JsDelivrFlat
+  $files = $global:JsDelivrFlat.files
+  if(-not $files){ return @() }
+  $dirs = New-Object System.Collections.Generic.HashSet[string]
+  foreach($f in $files){
+    $n = $f.name
+    if($n -match '^ofl/([^/]+)/.*\.(ttf|otf)$'){ [void]$dirs.Add($matches[1]) }
+  }
+  ,$dirs.ToArray()
 }
+function Fetch-TTFs-FromGF {
+  param([string]$GFDir,[string]$OutDir)
+  if(-not(Test-Path $OutDir)){ New-Item -ItemType Directory -Path $OutDir | Out-Null }
+  $entries = @()
 
-function Initialize-TlsSettings {
-    <#
-    .SYNOPSIS
-        Ensures TLS 1.2 is enabled for secure connections
-    #>
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
+  # GitHub API
+  $raw = Get-String -Url ("https://api.github.com/repos/google/fonts/contents/ofl/{0}" -f $GFDir) -Accept "application/vnd.github+json"
+  if($raw){
+    $json = $raw | ConvertFrom-Json
+    $entries += ($json | Where-Object { $_.type -eq 'file' -and $_.name -match '\.(ttf|otf)$' })
+    $static = $json | Where-Object { $_.type -eq 'dir' -and $_.name -eq 'static' }
+    if($static){
+      $raw2 = Get-String -Url ("https://api.github.com/repos/google/fonts/contents/ofl/{0}/static" -f $GFDir) -Accept "application/vnd.github+json"
+      if($raw2){
+        $json2 = $raw2 | ConvertFrom-Json
+        $entries += ($json2 | Where-Object { $_.type -eq 'file' -and $_.name -match '\.(ttf|otf)$' })
+      }
     }
-    catch {
-        # Silently continue if TLS configuration fails
-    }
-}
+  }
 
-function Write-LogMessage {
-    <#
-    .SYNOPSIS
-        Writes timestamped log messages to both console and log file
-    .PARAMETER Message
-        The message to log
-    #>
-    param([string]$Message)
-    
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logLine = "[{0}] {1}" -f $timestamp, $Message
-    Write-Host $logLine
-    try {
-        Add-Content -Path $script:LogFile -Value $logLine
-    }
-    catch {
-        # Silently continue if logging fails
-    }
-}
-
-function Start-HumanLikeDelay {
-    <#
-    .SYNOPSIS
-        Introduces random delay to simulate human behavior
-    .PARAMETER MinMs
-        Minimum delay in milliseconds
-    .PARAMETER MaxMs
-        Maximum delay in milliseconds
-    #>
-    param(
-        [int]$MinMs = $script:JitterMinMs,
-        [int]$MaxMs = $script:JitterMaxMs
-    )
-    Start-Sleep -Milliseconds (Get-Random -Minimum $MinMs -Maximum $MaxMs)
-}
-
-#endregion
-
-#region Network and Retry Logic
-
-function Invoke-WithRetryLogic {
-    <#
-    .SYNOPSIS
-        Executes a script block with exponential backoff retry logic
-    .PARAMETER Action
-        The script block to execute
-    .PARAMETER MaxAttempts
-        Maximum number of retry attempts
-    .PARAMETER BaseDelayMs
-        Base delay for exponential backoff
-    #>
-    param(
-        [scriptblock]$Action,
-        [int]$MaxAttempts = $script:NetworkRetryCount,
-        [int]$BaseDelayMs = $script:NetworkBaseDelayMs
-    )
-    
-    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        try {
-            return & $Action
-        }
-        catch {
-            if ($attempt -eq $MaxAttempts) {
-                throw
-            }
-            Start-Sleep -Milliseconds ($BaseDelayMs * [math]::Pow(2, $attempt - 1))
-        }
-    }
-}
-
-function New-ConfiguredHttpClient {
-    <#
-    .SYNOPSIS
-        Creates a configured HttpClient with proper headers and proxy settings
-    .PARAMETER Accept
-        Accept header value
-    .PARAMETER Referer
-        Referer header value
-    #>
-    param(
-        [string]$Accept = "*/*",
-        [string]$Referer = ""
-    )
-    
-    Initialize-TlsSettings
-    Add-Type -AssemblyName System.Net.Http
-    
-    $handler = New-Object System.Net.Http.HttpClientHandler
-    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
-    $handler.AllowAutoRedirect = $true
-    
-    # Configure proxy settings
-    if ($ProxyUrl) {
-        $webProxy = New-Object System.Net.WebProxy($ProxyUrl, $true)
-        if ($ProxyCredential) {
-            $webProxy.Credentials = $ProxyCredential.GetNetworkCredential()
-        }
-        else {
-            $webProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
-        }
-        $handler.UseProxy = $true
-        $handler.Proxy = $webProxy
-    }
-    elseif ($UseSystemProxy) {
-        $handler.UseProxy = $true
-        $handler.Proxy = [System.Net.WebRequest]::DefaultWebProxy
-        if ($handler.Proxy) {
-            $handler.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
-        }
-    }
-    else {
-        $handler.UseProxy = $false
-    }
-    
-    $client = New-Object System.Net.Http.HttpClient($handler)
-    $client.Timeout = [TimeSpan]::FromMinutes($script:HttpTimeoutMinutes)
-    $client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell")
-    $client.DefaultRequestHeaders.Accept.ParseAdd($Accept)
-    if ($Referer) {
-        $client.DefaultRequestHeaders.Referrer = [Uri]$Referer
-    }
-    
-    return $client
-}
-
-function Invoke-HttpDownload {
-    <#
-    .SYNOPSIS
-        Downloads a file from URL with retry logic
-    .PARAMETER Url
-        URL to download from
-    .PARAMETER OutputPath
-        Local file path to save to
-    .PARAMETER Accept
-        Accept header value
-    .PARAMETER Referer
-        Referer header value
-    #>
-    param(
-        [string]$Url,
-        [string]$OutputPath,
-        [string]$Accept = "*/*",
-        [string]$Referer = ""
-    )
-
-    Invoke-WithRetryLogic -Action {
-        $client = New-ConfiguredHttpClient -Accept $Accept -Referer $Referer
-        try {
-            $response = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
-            if (-not $response.IsSuccessStatusCode) {
-                throw ("HTTP {0} {1}" -f [int]$response.StatusCode, $response.ReasonPhrase)
-            }
-
-            $inputStream = $response.Content.ReadAsStreamAsync().Result
-            $outputStream = [System.IO.File]::Open($OutputPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-            try {
-                $inputStream.CopyTo($outputStream)
-            }
-            finally {
-                $outputStream.Close()
-                $inputStream.Close()
-                $client.Dispose()
-            }
-        }
-        catch {
-            $client.Dispose()
-            throw
-        }
-    }
-}
-
-function Get-HttpString {
-    <#
-    .SYNOPSIS
-        Downloads string content from URL with retry logic
-    .PARAMETER Url
-        URL to download from
-    .PARAMETER Accept
-        Accept header value
-    .PARAMETER Referer
-        Referer header value
-    #>
-    param(
-        [string]$Url,
-        [string]$Accept = "*/*",
-        [string]$Referer = ""
-    )
-
-    Invoke-WithRetryLogic -Action {
-        $client = New-ConfiguredHttpClient -Accept $Accept -Referer $Referer
-        try {
-            return $client.GetStringAsync($Url).Result
-        }
-        catch {
-            $client.Dispose()
-            throw
-        }
-        finally {
-            $client.Dispose()
-        }
-    }
-}
-
-#endregion
-
-#region Cache Management
-
-function Get-CachedFileOrDownload {
-    <#
-    .SYNOPSIS
-        Gets file from cache or downloads if not cached
-    .PARAMETER Url
-        URL to download from
-    .PARAMETER PreferredFileName
-        Preferred filename for cache
-    .PARAMETER Accept
-        Accept header value
-    .PARAMETER Referer
-        Referer header value
-    #>
-    param(
-        [string]$Url,
-        [string]$PreferredFileName,
-        [string]$Accept = "*/*",
-        [string]$Referer = ""
-    )
-
-    $fileName = $PreferredFileName
-    if (-not $fileName -or $fileName.Trim().Length -eq 0) {
-        try {
-            $fileName = [System.IO.Path]::GetFileName([Uri]$Url)
-        }
-        catch {
-            $fileName = [Guid]::NewGuid().ToString()
-        }
-    }
-
-    $cachedPath = Join-Path $script:CacheDir $fileName
-    if (Test-Path $cachedPath) {
-        Write-LogMessage ("Cache hit: {0}" -f $fileName)
-    }
-    else {
-        Write-LogMessage ("Cache miss, downloading: {0}" -f $Url)
-        Invoke-HttpDownload -Url $Url -OutputPath $cachedPath -Accept $Accept -Referer $Referer
-    }
-
-    return $cachedPath
-}
-
-#region File Validation and Processing
-
-function Test-ValidZipFile {
-    <#
-    .SYNOPSIS
-        Validates if a file is a valid ZIP archive
-    .PARAMETER ZipPath
-        Path to ZIP file to validate
-    #>
-    param([string]$ZipPath)
-
-    if (-not (Test-Path $ZipPath)) {
-        return $false
-    }
-
-    $fileInfo = Get-Item $ZipPath -ErrorAction SilentlyContinue
-    if (-not $fileInfo -or $fileInfo.Length -lt $script:MinValidZipSizeBytes) {
-        return $false
-    }
-
-    # Check ZIP signature
-    $fileStream = [System.IO.File]::Open($ZipPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-    try {
-        $buffer = New-Object byte[] 2
-        $null = $fileStream.Read($buffer, 0, 2)
-        if ($buffer[0] -ne 0x50 -or $buffer[1] -ne 0x4B) {
-            return $false
-        }
-    }
-    finally {
-        $fileStream.Close()
-    }
-
-    # Validate ZIP structure
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $stream = [System.IO.File]::OpenRead($ZipPath)
-        try {
-            $zipArchive = New-Object System.IO.Compression.ZipArchive($stream, [System.IO.Compression.ZipArchiveMode]::Read, $false)
-            $null = $zipArchive.Entries.Count
-            $zipArchive.Dispose()
-        }
-        finally {
-            $stream.Dispose()
-        }
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
-function Expand-ZipArchive {
-    <#
-    .SYNOPSIS
-        Extracts ZIP archive to specified directory
-    .PARAMETER ZipPath
-        Path to ZIP file
-    .PARAMETER OutputDirectory
-        Directory to extract to
-    #>
-    param(
-        [string]$ZipPath,
-        [string]$OutputDirectory
-    )
-
-    if (Test-Path $OutputDirectory) {
-        Remove-Item -Recurse -Force $OutputDirectory -ErrorAction SilentlyContinue
-    }
-    New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
-
-    try {
-        Expand-Archive -Path $ZipPath -DestinationPath $OutputDirectory -Force
-    }
-    catch {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $OutputDirectory)
-    }
-}
-
-function Get-UiSuitableFontFiles {
-    <#
-    .SYNOPSIS
-        Filters font files to get UI-suitable ones (non-italic, regular weights)
-    .PARAMETER FolderPath
-        Folder containing font files
-    #>
-    param([string]$FolderPath)
-
-    $allFontFiles = Get-ChildItem -Path $FolderPath -Recurse -Include *.ttf, *.otf -ErrorAction SilentlyContinue
-    if (-not $allFontFiles) {
-        return @()
-    }
-
-    # Filter out italic/oblique fonts
-    $nonItalicFonts = $allFontFiles | Where-Object { $_.Name -notmatch '(Italic|Oblique)' }
-
-    # Prefer regular/standard weights
-    $preferredFonts = $nonItalicFonts | Where-Object {
-        $_.Name -match '(?i)(Regular|Book|Roman|Text|Medium|500|400|VariableFont|\[wght\])'
-    }
-
-    $selectedFonts = if ($preferredFonts) { $preferredFonts } else { $nonItalicFonts }
-    return $selectedFonts | Select-Object -First $script:MaxUiFontFiles
-}
-
-function Get-FontFamilyNamesFromFiles {
-    <#
-    .SYNOPSIS
-        Extracts likely font family names from font file names
-    .PARAMETER FontFiles
-        Array of font file objects
-    #>
-    param([System.IO.FileInfo[]]$FontFiles)
-
-    $familyNames = New-Object System.Collections.Generic.HashSet[string]
-    foreach ($fontFile in $FontFiles) {
-        $baseName = $fontFile.BaseName -replace '[-_](Regular|Book|Roman|Text|Medium|Light|Bold|Black|Thin|Extra.*|Semi.*|Variable.*|[0-9]+|Italic|Oblique)$', ''
-        $cleanName = ($baseName -replace '[-_]+', ' ').Trim()
-        if ($cleanName.Length -gt 1) {
-            [void]$familyNames.Add($cleanName)
-        }
-    }
-    return @($familyNames)
-}
-
-function Get-ShuffledArray {
-    <#
-    .SYNOPSIS
-        Returns a shuffled copy of the input array
-    .PARAMETER InputArray
-        Array to shuffle
-    #>
-    param([object[]]$InputArray)
-
-    if (-not $InputArray) {
-        return @()
-    }
-
-    $random = New-Object System.Random
-    return $InputArray | Sort-Object { $random.Next() }
-}
-
-#region Google Fonts API Integration
-
-function Get-GoogleFontsCatalogFamilies {
-    <#
-    .SYNOPSIS
-        Retrieves font family list from Google Fonts metadata API
-    #>
-    $rawResponse = Get-HttpString -Url "https://fonts.google.com/metadata/fonts" -Accept "application/json" -Referer "https://fonts.google.com/"
-    if ([string]::IsNullOrWhiteSpace($rawResponse)) {
-        return @()
-    }
-
-    # Remove JSONP prefix if present
-    $jsonContent = $rawResponse.Trim()
-    if ($jsonContent.StartsWith(")]}'")) {
-        $jsonContent = $jsonContent.Substring(4)
-    }
-
-    try {
-        $metadata = $jsonContent | ConvertFrom-Json
-        return $metadata.familyMetadataList.family | Select-Object -Unique
-    }
-    catch {
-        return @()
-    }
-}
-
-function Select-RandomFontFamilies {
-    <#
-    .SYNOPSIS
-        Selects random font families from Google Fonts catalog
-    .PARAMETER Count
-        Number of families to select
-    .PARAMETER IncludeMonospace
-        Whether to include monospace fonts
-    #>
-    param(
-        [int]$Count,
-        [switch]$IncludeMonospace
-    )
-
-    $availableFamilies = Get-GoogleFontsCatalogFamilies
-    if (-not $availableFamilies -or $availableFamilies.Count -eq 0) {
-        return @()
-    }
-
-    $random = New-Object System.Random
-    $selectedFamilies = New-Object System.Collections.Generic.List[string]
-
-    # Add monospace font if requested
-    if ($IncludeMonospace) {
-        $monospaceFonts = $availableFamilies | Where-Object { $_ -match '(?i)Mono|Code' } | Sort-Object { $random.Next() } | Select-Object -First 1
-        if ($monospaceFonts) {
-            $selectedFamilies.Add($monospaceFonts) | Out-Null
-        }
-    }
-
-    # Fill remaining slots with random families
-    while ($selectedFamilies.Count -lt $Count) {
-        $candidate = $availableFamilies | Sort-Object { $random.Next() } | Select-Object -First 1
-        if ($selectedFamilies -notcontains $candidate) {
-            $selectedFamilies.Add($candidate) | Out-Null
-        }
-    }
-
-    return @($selectedFamilies)
-}
-
-function Get-GoogleFontsDownloadUrl {
-    <#
-    .SYNOPSIS
-        Constructs Google Fonts download URL for a family
-    .PARAMETER FamilyName
-        Font family name
-    #>
-    param([string]$FamilyName)
-
-    $encodedName = [Uri]::EscapeDataString($FamilyName)
-    return "https://fonts.google.com/download?family=$encodedName"
-}
-
-#endregion
-
-#region GitHub OFL Repository Integration
-
-function Get-GoogleFontsOflDirectoriesFromGitHub {
-    <#
-    .SYNOPSIS
-        Gets OFL directory list from Google Fonts GitHub repository
-    .PARAMETER MaxPages
-        Maximum pages to fetch from GitHub API
-    #>
-    param([int]$MaxPages = 6)
-
-    $allDirectories = New-Object System.Collections.Generic.List[string]
-
-    for ($page = 1; $page -le $MaxPages; $page++) {
-        $apiUrl = "https://api.github.com/repos/google/fonts/contents/ofl?page=$page&per_page=100"
-        $rawResponse = Get-HttpString -Url $apiUrl -Accept "application/vnd.github+json"
-
-        if ([string]::IsNullOrWhiteSpace($rawResponse)) {
-            break
-        }
-
-        $jsonResponse = $rawResponse | ConvertFrom-Json
-        $directories = $jsonResponse | Where-Object { $_.type -eq 'dir' } | ForEach-Object { $_.name }
-
-        if (-not $directories -or $directories.Count -eq 0) {
-            break
-        }
-
-        $directories | ForEach-Object { $allDirectories.Add($_) | Out-Null }
-    }
-
-    return @($allDirectories)
-}
-
-function Initialize-JsDelivrCache {
-    <#
-    .SYNOPSIS
-        Initializes the jsDelivr flat file cache for Google Fonts
-    #>
-    if ($global:JsDelivrFlat -ne $null) {
-        return
-    }
-
-    $rawResponse = Get-HttpString -Url "https://data.jsdelivr.com/v1/package/gh/google/fonts@main/flat" -Accept "application/json"
-    if (-not [string]::IsNullOrWhiteSpace($rawResponse)) {
-        $global:JsDelivrFlat = $rawResponse | ConvertFrom-Json
-    }
-    else {
-        $global:JsDelivrFlat = @{}
-    }
-}
-
-function Get-GoogleFontsOflDirectoriesFromJsDelivr {
-    <#
-    .SYNOPSIS
-        Gets OFL directory list from jsDelivr API as fallback
-    #>
-    Initialize-JsDelivrCache
-
+  # jsDelivr fallback
+  if(-not $entries -or $entries.Count -eq 0){
+    Ensure-JsDelivrFlat
     $files = $global:JsDelivrFlat.files
-    if (-not $files) {
-        return @()
-    }
-
-    $directories = New-Object System.Collections.Generic.HashSet[string]
-    foreach ($file in $files) {
-        $fileName = $file.name
-        if ($fileName -match '^ofl/([^/]+)/.*\.(ttf|otf)$') {
-            [void]$directories.Add($matches[1])
+    if($files){
+      $entries = @()
+      foreach($f in $files){
+        $n = $f.name
+        if($n -match ("^ofl/{0}/.*\.(ttf|otf)$" -f [Regex]::Escape($GFDir))){
+          $entries += [PSCustomObject]@{ name=(Split-Path $n -Leaf); download_url=("https://cdn.jsdelivr.net/gh/google/fonts@main/{0}" -f $n) }
         }
+      }
     }
+  }
 
-    return @($directories)
+  $downloaded=@()
+  foreach($e in $entries){
+    $dest = Join-Path $OutDir $e.name
+    $url  = if($e.download_url){ $e.download_url } else { "https://raw.githubusercontent.com/google/fonts/main/ofl/$GFDir/$($e.name)" }
+    try{
+      $cached = Get-CachedOrDownload -Url $url -PreferredName $e.name -Accept "application/octet-stream"
+      Copy-Item $cached $dest -Force
+      $fi=Get-Item $dest -ErrorAction SilentlyContinue
+      if($fi -and $fi.Length -gt 10000){ $downloaded += $dest }
+    } catch { Write-Log ("DL fail {0}: {1}" -f $url,$_.Exception.Message) }
+    if($downloaded.Count -ge 6){ break }
+  }
+  $downloaded
 }
 
-#region Font File Fetching
-
-function Get-FontFilesFromGoogleFontsOfl {
-    <#
-    .SYNOPSIS
-        Downloads font files from Google Fonts OFL directory
-    .PARAMETER DirectoryName
-        OFL directory name
-    .PARAMETER OutputDirectory
-        Local directory to save files
-    #>
-    param(
-        [string]$DirectoryName,
-        [string]$OutputDirectory
-    )
-
-    if (-not (Test-Path $OutputDirectory)) {
-        New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
-    }
-
-    $fontEntries = @()
-
-    # Try GitHub API first
-    $githubApiUrl = "https://api.github.com/repos/google/fonts/contents/ofl/{0}" -f $DirectoryName
-    $rawResponse = Get-HttpString -Url $githubApiUrl -Accept "application/vnd.github+json"
-
-    if ($rawResponse) {
-        $jsonResponse = $rawResponse | ConvertFrom-Json
-        $fontEntries += ($jsonResponse | Where-Object { $_.type -eq 'file' -and $_.name -match '\.(ttf|otf)$' })
-
-        # Check for static subdirectory
-        $staticDirectory = $jsonResponse | Where-Object { $_.type -eq 'dir' -and $_.name -eq 'static' }
-        if ($staticDirectory) {
-            $staticApiUrl = "https://api.github.com/repos/google/fonts/contents/ofl/{0}/static" -f $DirectoryName
-            $staticResponse = Get-HttpString -Url $staticApiUrl -Accept "application/vnd.github+json"
-            if ($staticResponse) {
-                $staticJson = $staticResponse | ConvertFrom-Json
-                $fontEntries += ($staticJson | Where-Object { $_.type -eq 'file' -and $_.name -match '\.(ttf|otf)$' })
-            }
-        }
-    }
-
-    # Fallback to jsDelivr if GitHub API failed
-    if (-not $fontEntries -or $fontEntries.Count -eq 0) {
-        Initialize-JsDelivrCache
-        $files = $global:JsDelivrFlat.files
-        if ($files) {
-            $fontEntries = @()
-            foreach ($file in $files) {
-                $fileName = $file.name
-                if ($fileName -match ("^ofl/{0}/.*\.(ttf|otf)$" -f [Regex]::Escape($DirectoryName))) {
-                    $fontEntries += [PSCustomObject]@{
-                        name = (Split-Path $fileName -Leaf)
-                        download_url = ("https://cdn.jsdelivr.net/gh/google/fonts@main/{0}" -f $fileName)
-                    }
-                }
-            }
-        }
-    }
-
-    # Download font files
-    $downloadedFiles = @()
-    foreach ($entry in $fontEntries) {
-        $destinationPath = Join-Path $OutputDirectory $entry.name
-        $downloadUrl = if ($entry.download_url) {
-            $entry.download_url
-        } else {
-            "https://raw.githubusercontent.com/google/fonts/main/ofl/$DirectoryName/$($entry.name)"
-        }
-
-        try {
-            $cachedFile = Get-CachedFileOrDownload -Url $downloadUrl -PreferredFileName $entry.name -Accept "application/octet-stream"
-            Copy-Item $cachedFile $destinationPath -Force
-
-            $fileInfo = Get-Item $destinationPath -ErrorAction SilentlyContinue
-            if ($fileInfo -and $fileInfo.Length -gt $script:MinValidFontSizeBytes) {
-                $downloadedFiles += $destinationPath
-            }
-        }
-        catch {
-            Write-LogMessage ("Download failed for {0}: {1}" -f $downloadUrl, $_.Exception.Message)
-        }
-
-        if ($downloadedFiles.Count -ge $script:MaxFontFilesPerFamily) {
-            break
-        }
-    }
-
-    return $downloadedFiles
+# --------------------------- FILE FILTER ---------------------------
+function Get-UiFontFiles {
+  param([string]$Folder)
+  $all = Get-ChildItem -Path $Folder -Recurse -Include *.ttf, *.otf -ErrorAction SilentlyContinue
+  if(-not $all){ return @() }
+  $nonItalic = $all | Where-Object { $_.Name -notmatch '(Italic|Oblique)' }
+  $preferred = $nonItalic | Where-Object { $_.Name -match '(?i)(Regular|Book|Roman|Text|Medium|500|400|VariableFont|\[wght\])' }
+  $chosen = if($preferred){ $preferred } else { $nonItalic }
+  $chosen | Select-Object -First 8
 }
 
-function Get-CoverageFontUrls {
-    <#
-    .SYNOPSIS
-        Gets direct URLs for coverage fonts (Noto family)
-    .PARAMETER FamilyName
-        Coverage font family name
-    #>
-    param([string]$FamilyName)
-
-    switch -Regex ($FamilyName) {
-        '^Noto Sans$' {
-            return @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf')
-        }
-        '^Noto Serif$' {
-            return @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSerif/NotoSerif-Regular.ttf')
-        }
-        '^Noto Sans Symbols 2$' {
-            return @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf')
-        }
-        '^Noto Sans Symbols$' {
-            return @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSansSymbols/NotoSansSymbols-Regular.ttf')
-        }
-        default {
-            return @()
-        }
-    }
+# --------------------------- VENDOR QUICK (coverage) ---------------------------
+function Get-Vendor-Urls {
+  param([string]$FamilyName)
+  switch -Regex ($FamilyName) {
+    '^Noto Sans$'            { @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf'); break }
+    '^Noto Serif$'           { @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSerif/NotoSerif-Regular.ttf'); break }
+    '^Noto Sans Symbols 2$'  { @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf'); break }
+    '^Noto Sans Symbols$'    { @('https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSansSymbols/NotoSansSymbols-Regular.ttf'); break }
+    default { @() }
+  }
+}
+function Try-Fetch-From-Urls {
+  param([string[]]$Urls,[string]$OutDir)
+  $downloaded=$false
+  foreach($u in $Urls){
+    try{
+      $fileName = [System.IO.Path]::GetFileName($u); if($fileName -eq '' -or $fileName -eq $null){ $fileName = [Guid]::NewGuid().ToString() }
+      $tmp = Join-Path $TempRoot $fileName
+      $cached = Get-CachedOrDownload -Url $u -PreferredName $fileName -Accept "application/octet-stream"
+      Copy-Item $cached $tmp -Force
+      Copy-Item $tmp (Join-Path $OutDir $fileName) -Force
+      $downloaded=$true
+    } catch { Write-Log ("Fetch failed: {0}" -f $_.Exception.Message) }
+  }
+  return $downloaded
 }
 
-function Install-FontFilesFromUrls {
-    <#
-    .SYNOPSIS
-        Downloads and installs font files from provided URLs
-    .PARAMETER Urls
-        Array of URLs to download from
-    .PARAMETER OutputDirectory
-        Directory to save downloaded files
-    #>
-    param(
-        [string[]]$Urls,
-        [string]$OutputDirectory
-    )
-
-    $downloadSuccess = $false
-    foreach ($url in $Urls) {
-        try {
-            $fileName = [System.IO.Path]::GetFileName($url)
-            if ($fileName -eq '' -or $fileName -eq $null) {
-                $fileName = [Guid]::NewGuid().ToString()
-            }
-
-            $tempPath = Join-Path $script:TempRoot $fileName
-            $cachedFile = Get-CachedFileOrDownload -Url $url -PreferredFileName $fileName -Accept "application/octet-stream"
-            Copy-Item $cachedFile $tempPath -Force
-            Copy-Item $tempPath (Join-Path $OutputDirectory $fileName) -Force
-            $downloadSuccess = $true
-        }
-        catch {
-            Write-LogMessage ("URL fetch failed: {0}" -f $_.Exception.Message)
-        }
-    }
-
-    return $downloadSuccess
+# --------------------------- INSTALL & VERIFY ---------------------------
+function Install-FontFile {
+  param([string]$FontPath)
+  if(-not(Test-Path $FontPath)){ return }
+  $shell = New-Object -ComObject Shell.Application
+  $fonts = $shell.Namespace(0x14); if(-not $fonts){ throw "Cannot access Fonts Shell." }
+  Write-Log ("Installing font file: {0}" -f $FontPath)
+  $fonts.CopyHere($FontPath); Jitter
+}
+function Install-FontSet {
+  param([System.IO.FileInfo[]]$Files)
+  $installed=@()
+  foreach($f in $Files){
+    try{ Install-FontFile -FontPath $f.FullName; $installed += $f.FullName }
+    catch{ Write-Log ("Install failed: {0} - {1}" -f $f.Name,$_.Exception.Message) }
+  }
+  $installed
+}
+function Guess-FamilyFromFiles {
+  param([System.IO.FileInfo[]]$Files)
+  $names = New-Object System.Collections.Generic.HashSet[string]
+  foreach($f in $Files){
+    $n = $f.BaseName -replace '[-_](Regular|Book|Roman|Text|Medium|Light|Bold|Black|Thin|Extra.*|Semi.*|Variable.*|[0-9]+|Italic|Oblique)$',''
+    $n = ($n -replace '[-_]+',' ').Trim()
+    if($n.Length -gt 1){ [void]$names.Add($n) }
+  }
+  ,$names.ToArray()
 }
 
-#region Font Installation
+# --------------------------- RANDOM HELPERS ---------------------------
+function Get-Shuffled { param([object[]]$Array) if(-not $Array){ return @() } $r = New-Object System.Random; $Array | Sort-Object { $r.Next() } }
 
-function Install-SingleFontFile {
-    <#
-    .SYNOPSIS
-        Installs a single font file using Windows Fonts Shell
-    .PARAMETER FontFilePath
-        Path to font file to install
-    #>
-    param([string]$FontFilePath)
+# --------------------------- SYSTEM MAPPING ---------------------------
+function Set-SystemFont {
+  param([string]$FontFamily)
+  $fsKey='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
+  New-Item -Path $fsKey -Force | Out-Null
+  New-ItemProperty -Path $fsKey -Name 'Segoe UI'       -Value $FontFamily -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $fsKey -Name 'MS Shell Dlg'   -Value $FontFamily -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $fsKey -Name 'MS Shell Dlg 2' -Value $FontFamily -PropertyType String -Force | Out-Null
+  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothing' -Value '2' -Force
+  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothingType' -Value 2 -Type DWord -Force
+  Write-Log ("Set system base font -> {0}" -f $FontFamily)
+  Jitter
+}
+function Prepend-FontLink {
+  param([string[]]$FamiliesToPrioritize,[string[]]$CoverageFirst)
+  if(-not $FamiliesToPrioritize -or $FamiliesToPrioritize.Count -eq 0){ return }
+  $linkKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink'
+  New-Item -Path $linkKey -Force | Out-Null
+  $regFonts = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts' -ErrorAction SilentlyContinue
+  if(-not $regFonts){ return }
 
-    if (-not (Test-Path $FontFilePath)) {
-        return
+  $linesByFamily = @{}
+  foreach($fam in $FamiliesToPrioritize){
+    $matches = $regFonts.PSObject.Properties | Where-Object { $_.Name -match [Regex]::Escape($fam).Replace('\ ','\s+') }
+    $pairs = @()
+    foreach($m in $matches){
+      $file = [string]$m.Value
+      if($file -and ($file -match '\.ttf$' -or $file -match '\.otf$')){ $pairs += ("{0},{1}" -f $file, $fam) }
     }
+    if($pairs.Count -gt 0){ $linesByFamily[$fam] = $pairs }
+  }
 
-    $shell = New-Object -ComObject Shell.Application
-    $fontsFolder = $shell.Namespace(0x14)
-    if (-not $fontsFolder) {
-        throw "Cannot access Fonts Shell."
+  $presentCoverage = @(); foreach($cf in $CoverageFirst){ if($linesByFamily.ContainsKey($cf)){ $presentCoverage += $cf } }
+  $others = ($FamiliesToPrioritize | Where-Object { $_ -notin $presentCoverage })
+  $ordered = @($presentCoverage + (Get-Shuffled -Array $others))
+
+  foreach($base in $BaseFamiliesToAugment){
+    $existing = (Get-ItemProperty -Path $linkKey -Name $base -ErrorAction SilentlyContinue).$base
+    if(-not $existing){ $existing = @() }
+
+    $ourLines = @()
+    foreach($fam in $ordered){
+      if($linesByFamily.ContainsKey($fam)){
+        foreach($ln in $linesByFamily[$fam]){
+          if(-not ($ourLines -contains $ln)){ $ourLines += $ln }
+        }
+      }
     }
-
-    Write-LogMessage ("Installing font file: {0}" -f $FontFilePath)
-    $fontsFolder.CopyHere($FontFilePath)
-    Start-HumanLikeDelay
+    $combined = @($ourLines + $existing)
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'; $final = New-Object System.Collections.Generic.List[string]
+    foreach($ln in $combined){ if([string]::IsNullOrWhiteSpace($ln)){ continue }; if($seen.Add($ln)){ [void]$final.Add($ln) } }
+    if($final.Count -gt 0){
+      Set-ItemProperty -Path $linkKey -Name $base -Type MultiString -Value $final
+      Write-Log ("FontLink prepended for base '{0}' with {1} entries" -f $base,$final.Count)
+    }
+    Jitter
+  }
+}
+function Map-SegoeUISymbol {
+  param([string]$ToFamily)
+  if([string]::IsNullOrWhiteSpace($ToFamily)){ return }
+  $fsKey='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
+  try{
+    New-Item -Path $fsKey -Force | Out-Null
+    New-ItemProperty -Path $fsKey -Name 'Segoe UI Symbol' -Value $ToFamily -PropertyType String -Force | Out-Null
+    Write-Log ("Mapped 'Segoe UI Symbol' -> {0}" -f $ToFamily)
+  } catch {}
 }
 
-function Install-FontFileSet {
-    <#
-    .SYNOPSIS
-        Installs multiple font files
-    .PARAMETER FontFiles
-        Array of font file objects to install
-    #>
-    param([System.IO.FileInfo[]]$FontFiles)
-
-    $installedFiles = @()
-    foreach ($fontFile in $FontFiles) {
-        try {
-            Install-SingleFontFile -FontFilePath $fontFile.FullName
-            $installedFiles += $fontFile.FullName
-        }
-        catch {
-            Write-LogMessage ("Install failed for {0}: {1}" -f $fontFile.Name, $_.Exception.Message)
-        }
+# --------------------------- CHROMIUM DEFAULT FONTS ---------------------------
+function Stop-ChromiumIfRunning { foreach($name in @('chrome','msedge','chrome.exe','msedge.exe')){ try{ Get-Process $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue } catch {} } }
+function Get-ChromiumUserDataRoots {
+  $roots = New-Object System.Collections.Generic.List[string]
+  try{
+    $procs = Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'"
+    foreach($p in $procs){
+      $cmd = $p.CommandLine
+      if($cmd -and ($cmd -match '--user-data-dir=(?:"([^"]+)"|(\S+))')){
+        $ud = if($matches[1]){ $matches[1] } else { $matches[2] }
+        if(Test-Path $ud){ $roots.Add($ud) | Out-Null }
+      }
     }
-
-    return $installedFiles
+  } catch {}
+  $userDirs = Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^(All Users|Default|Default User|Public|DefaultAppPool)$' }
+  $chromes = @('Google\Chrome\User Data','Google\Chrome Beta\User Data','Google\Chrome Dev\User Data','Google\Chrome SxS\User Data','Chromium\User Data')
+  $edges   = @('Microsoft\Edge\User Data','Microsoft\Edge Beta\User Data','Microsoft\Edge Dev\User Data','Microsoft\Edge SxS\User Data')
+  foreach($u in $userDirs){ foreach($suffix in ($chromes + $edges)){ foreach($rootType in @('Local','Roaming')){ $p = Join-Path $u.FullName ("AppData\{0}\{1}" -f $rootType,$suffix); if(Test-Path $p){ $roots.Add($p) | Out-Null } } } }
+  $cands = @((Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data'),(Join-Path $env:LOCALAPPDATA 'Chromium\User Data'),(Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'),(Join-Path $env:APPDATA 'Google\Chrome\User Data'),(Join-Path $env:APPDATA 'Microsoft\Edge\User Data'))
+  foreach($p in $cands){ if(Test-Path $p){ $roots.Add($p) | Out-Null } }
+  ($roots.ToArray() | Where-Object { Test-Path $_ } | Select-Object -Unique)
+}
+function Set-ChromiumDefaultFonts {
+  param([string[]]$UserDataRoots,[string]$SerifFamily,[string]$SansFamily,[string]$MonoFamily)
+  foreach($UserDataRoot in $UserDataRoots){
+    $profiles = Get-ChildItem -Path $UserDataRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(Default|Profile \d+|Guest Profile|System Profile)$' }
+    foreach($p in $profiles){
+      $pref = Join-Path $p.FullName 'Preferences'
+      if(-not (Test-Path $pref)){ continue }
+      try{
+        $stamp = Get-Date -Format yyyyMMdd-HHmmss
+        Copy-Item $pref ($pref + ".bak-$stamp") -Force -ErrorAction SilentlyContinue
+        $json = Get-Content $pref -Raw -ErrorAction Stop | ConvertFrom-Json
+        if(-not $json.fonts){ $json | Add-Member -NotePropertyName fonts -NotePropertyValue (@{}) }
+        foreach($k in @('serif','sansserif','standard','fixed','cursive','fantasy')){ if(-not $json.fonts.$k){ $json.fonts.$k = @{} } }
+        $json.fonts.serif.Zyyy      = $SerifFamily
+        $json.fonts.standard.Zyyy   = $SerifFamily
+        $json.fonts.sansserif.Zyyy  = $SansFamily
+        $json.fonts.fixed.Zyyy      = $MonoFamily
+        if(-not $json.fonts.cursive.Zyyy){  $json.fonts.cursive.Zyyy = $SansFamily }
+        if(-not $json.fonts.fantasy.Zyyy){  $json.fonts.fantasy.Zyyy = $SansFamily }
+        $json | ConvertTo-Json -Depth 100 | Set-Content -Path $pref -Encoding UTF8
+        Write-Log ("Updated Chromium Preferences: {0}" -f $pref)
+      } catch { Write-Log ("Failed to update Chromium Preferences {0}: {1}" -f $pref,$_.Exception.Message) }
+      Jitter
+    }
+  }
 }
 
-#endregion
+# --------------------------- REGISTRY UTILITIES ---------------------------
+function Refresh-FontCache {
+  Write-Log "Refreshing Windows Font Cache..."
+  $services = @('FontCache','FontCache3.0.0.0')
+  foreach($svc in $services){ try{ Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch{} }
+  $svcCache = "C:\Windows\ServiceProfiles\LocalService\AppData\Local\FontCache"; $usrCache = Join-Path $env:LOCALAPPDATA "FontCache"
+  foreach($p in @($svcCache,$usrCache)){ try{ if(Test-Path $p){ Get-ChildItem $p -Filter "*FontCache*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue } } catch {} }
+  foreach($svc in $services){ try{ Start-Service -Name $svc -ErrorAction SilentlyContinue } catch{} }
+  Jitter
+}
+function Restart-Explorer { Write-Log "Restarting Explorer..."; Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Process explorer.exe }
 
-#region System Font Configuration
-
-function Set-SystemDefaultFont {
-    <#
-    .SYNOPSIS
-        Sets the system default font family
-    .PARAMETER FontFamily
-        Font family name to set as default
-    #>
-    param([string]$FontFamily)
-
-    $fontSubstitutesKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
-    New-Item -Path $fontSubstitutesKey -Force | Out-Null
-
-    New-ItemProperty -Path $fontSubstitutesKey -Name 'Segoe UI' -Value $FontFamily -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $fontSubstitutesKey -Name 'MS Shell Dlg' -Value $FontFamily -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $fontSubstitutesKey -Name 'MS Shell Dlg 2' -Value $FontFamily -PropertyType String -Force | Out-Null
-
-    Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothing' -Value '2' -Force
-    Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothingType' -Value 2 -Type DWord -Force
-
-    Write-LogMessage ("Set system base font -> {0}" -f $FontFamily)
-    Start-HumanLikeDelay
+function Backup-FontRegistry {
+  Write-Log "Backing up registry keys..."
+  $items=@('HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes','HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink','HKCU\Control Panel\Desktop')
+  foreach($k in $items){
+    $safe=($k -replace '[\\/:*?"<>| ]','_')
+    $out=Join-Path $BackupDir "$safe.reg"
+    & reg.exe export $k $out /y | Out-Null
+  }
+  Jitter
+}
+function Restore-DefaultFont {
+  Write-Log "Restoring system font mappings to defaults..."
+  $fsKey='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
+  Remove-ItemProperty -Path $fsKey -Name 'Segoe UI' -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path $fsKey -Name 'MS Shell Dlg' -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path $fsKey -Name 'MS Shell Dlg 2' -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path $fsKey -Name 'Segoe UI Symbol' -ErrorAction SilentlyContinue
 }
 
-function Add-FontLinkEntries {
-    <#
-    .SYNOPSIS
-        Prepends font families to FontLink for fallback support
-    .PARAMETER FamiliesToPrioritize
-        Font families to add to FontLink
-    .PARAMETER CoverageFirst
-        Coverage fonts to prioritize first
-    #>
-    param(
-        [string[]]$FamiliesToPrioritize,
-        [string[]]$CoverageFirst
-    )
+# --------------------------- MAIN ---------------------------
+try{
+  Assert-Admin; Ensure-Dirs
+  Write-Log ("Log file: {0}" -f $LogFile)
 
-    if (-not $FamiliesToPrioritize -or $FamiliesToPrioritize.Count -eq 0) {
-        return
+  if($RestoreDefault){
+    Restore-DefaultFont; Refresh-FontCache; if(-not $NoRestartExplorer){ Restart-Explorer }
+    Write-Log "Done. System font reverted. Sign out or reboot may be required."
+    if($Cleanup){ if(Test-Path $TempRoot){ Remove-Item -Recurse -Force $TempRoot -ErrorAction SilentlyContinue } }
+    exit 0
+  }
+
+  # Random families (catalog) else OFL fallbacks
+  $randomFamilies = Pick-Random-Families -Count $FontsPerRun -WantMono:$IncludeMonospace
+  if(-not $randomFamilies -or $randomFamilies.Count -eq 0){
+    $ofl = (Get-GF-OFL-Dirs-GitHub); if(-not $ofl -or $ofl.Count -eq 0){ $ofl = Get-GF-OFL-Dirs-JsDelivr }
+    if(-not $ofl -or $ofl.Count -eq 0){ throw "No Google Fonts OFL entries found." }
+    $r = New-Object System.Random
+    $randomFamilies = @(); while($randomFamilies.Count -lt $FontsPerRun){ $cand = ($ofl | Sort-Object { $r.Next() } | Select-Object -First 1); if($randomFamilies -notcontains $cand){ $randomFamilies += $cand } }
+  }
+  Write-Log ("Random Google families/dirs: {0}" -f ($randomFamilies -join ", "))
+
+  $sessionFamilies = New-Object System.Collections.Generic.HashSet[string] # only this run
+
+  foreach($fam in $randomFamilies){
+    $safe = ($fam -replace '[^a-zA-Z0-9\-]','_')
+    $zip  = Join-Path $TempRoot ($safe + ".zip")
+    $dest = Join-Path $ExtractRoot $safe
+    if(-not (Test-Path $dest)){ New-Item -ItemType Directory -Path $dest | Out-Null }
+    $ok = $false
+
+    # Try Google ZIP
+    try{
+      $url = Get-GoogleZipUrl -FamilyName $fam
+      $cachedZip = Get-CachedOrDownload -Url $url -PreferredName ($safe + ".zip") -Accept "application/zip, */*" -Referer "https://fonts.google.com/"
+      if(Test-ZipFileValid -ZipPath $cachedZip){ Expand-Zip -ZipPath $cachedZip -OutDir $dest; $ok = $true }
+    } catch { Write-Log ("ZIP failed for {0}: {1}" -f $fam,$_.Exception.Message) }
+
+    # If failed, try OFL dir by slug
+    if(-not $ok){
+      $slug = ($fam.ToLower() -replace '[^a-z0-9]','')
+      try{ $ttfs = Fetch-TTFs-FromGF -GFDir $slug -OutDir $dest; if($ttfs -and $ttfs.Count -gt 0){ $ok = $true } } catch { Write-Log ("OFL fetch failed for {0}: {1}" -f $fam,$_.Exception.Message) }
     }
 
-    $fontLinkKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink'
-    New-Item -Path $fontLinkKey -Force | Out-Null
+    if(-not $ok -and $ExtraUrls){ if(Try-Fetch-From-Urls -Urls $ExtraUrls -OutDir $dest){ $ok = $true } }
+    if(-not $ok -and $LocalFolder -and (Test-Path $LocalFolder)){ Copy-Item -Path (Join-Path $LocalFolder '*') -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue; $ok = $true }
 
-    $registeredFonts = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts' -ErrorAction SilentlyContinue
-    if (-not $registeredFonts) {
-        return
+    $uiFiles = Get-UiFontFiles -Folder $dest
+    if(-not $ok -or -not $uiFiles -or $uiFiles.Count -eq 0){ Write-Log ("No usable fonts found for {0}. Skipping." -f $fam); continue }
+
+    [void](Install-FontSet -Files $uiFiles)
+    foreach($n in (Guess-FamilyFromFiles -Files $uiFiles)){ [void]$sessionFamilies.Add($n) }
+    [void]$sessionFamilies.Add($fam)
+  }
+
+  # Ensure at least one coverage family
+  $coverageInstalled = @()
+  foreach($c in $CoverageFamilies){ if($sessionFamilies.Contains($c)){ $coverageInstalled += $c } }
+  if($coverageInstalled.Count -eq 0){
+    $cov = Get-Random -InputObject $CoverageFamilies
+    $cdir = Join-Path $ExtractRoot "coverage"; if(-not (Test-Path $cdir)){ New-Item -ItemType Directory -Path $cdir | Out-Null }
+    $vendor = Get-Vendor-Urls -FamilyName $cov
+    if($vendor.Count -gt 0 -and (Try-Fetch-From-Urls -Urls $vendor -OutDir $cdir)){
+      $files = Get-UiFontFiles -Folder $cdir
+      if($files -and $files.Count -gt 0){ [void](Install-FontSet -Files $files); foreach($n in (Guess-FamilyFromFiles -Files $files)){ [void]$sessionFamilies.Add($n) }; [void]$sessionFamilies.Add($cov); $coverageInstalled = @($cov) }
     }
+  }
 
-    # Build font file mappings
-    $fontMappingsByFamily = @{}
-    foreach ($family in $FamiliesToPrioritize) {
-        $matchingEntries = $registeredFonts.PSObject.Properties | Where-Object {
-            $_.Name -match [Regex]::Escape($family).Replace('\ ', '\s+')
-        }
+  if($sessionFamilies.Count -eq 0){ throw "No font families were installed this session." }
+  $newFamilies = $sessionFamilies.ToArray()
+  Write-Log ("New families this run: {0}" -f ($newFamilies -join ", "))
 
-        $fontPairs = @()
-        foreach ($entry in $matchingEntries) {
-            $fontFile = [string]$entry.Value
-            if ($fontFile -and ($fontFile -match '\.ttf$' -or $fontFile -match '\.otf$')) {
-                $fontPairs += ("{0},{1}" -f $fontFile, $family)
-            }
-        }
+  # Primary = any newly installed non-symbol font
+  $primary = ($newFamilies | Where-Object { $_ -notmatch '(?i)symbols|emoji|dingbats|math' } | Get-Random)
+  if(-not $primary){ $primary = ($newFamilies | Get-Random) }
 
-        if ($fontPairs.Count -gt 0) {
-            $fontMappingsByFamily[$family] = $fontPairs
-        }
-    }
+  Write-Log "Backing up registry and applying system mappings..."
+  Backup-FontRegistry
+  Set-SystemFont -FontFamily $primary
 
-    # Determine priority order (coverage fonts first)
-    $presentCoverageFonts = @()
-    foreach ($coverageFont in $CoverageFirst) {
-        if ($fontMappingsByFamily.ContainsKey($coverageFont)) {
-            $presentCoverageFonts += $coverageFont
-        }
-    }
+  # Prepend into FontLink with coverage-first
+  $covFirst = @(); foreach($cf in $CoverageFamilies){ if($newFamilies -contains $cf){ $covFirst += $cf } }
+  Prepend-FontLink -FamiliesToPrioritize $newFamilies -CoverageFirst $covFirst
 
-    $otherFonts = ($FamiliesToPrioritize | Where-Object { $_ -notin $presentCoverageFonts })
-    $prioritizedOrder = @($presentCoverageFonts + (Get-ShuffledArray -InputArray $otherFonts))
+  # Optionally substitute Segoe UI Symbol directly to coverage (first available)
+  if(-not $NoSymbolSubstitute){
+    $sym = ($CoverageFamilies | Where-Object { $newFamilies -contains $_ } | Select-Object -First 1)
+    if($sym){ Map-SegoeUISymbol -ToFamily $sym }
+  }
 
-    # Update FontLink for each base family
-    foreach ($baseFamily in $script:BaseFamiliesToAugment) {
-        $existingEntries = (Get-ItemProperty -Path $fontLinkKey -Name $baseFamily -ErrorAction SilentlyContinue).$baseFamily
-        if (-not $existingEntries) {
-            $existingEntries = @()
-        }
+  # Update Chromium preferences to use broad-coverage families from this run
+  Stop-ChromiumIfRunning
+  $roots = Get-ChromiumUserDataRoots
+  $serifPick = ($newFamilies | Where-Object { $_ -match '(?i)noto serif|serif' } | Select-Object -First 1); if(-not $serifPick){ $serifPick = $primary }
+  $sansPick  = ($newFamilies | Where-Object { $_ -match '(?i)noto sans|inter|manrope|public sans' } | Select-Object -First 1); if(-not $sansPick){ $sansPick = $primary }
+  $monoPick  = ($newFamilies | Where-Object { $_ -match '(?i)mono|code' } | Select-Object -First 1); if(-not $monoPick){ $monoPick = $primary }
+  if($roots){ Set-ChromiumDefaultFonts -UserDataRoots $roots -SerifFamily $serifPick -SansFamily $sansPick -MonoFamily $monoPick }
 
-        $newEntries = @()
-        foreach ($family in $prioritizedOrder) {
-            if ($fontMappingsByFamily.ContainsKey($family)) {
-                foreach ($fontPair in $fontMappingsByFamily[$family]) {
-                    if (-not ($newEntries -contains $fontPair)) {
-                        $newEntries += $fontPair
-                    }
-                }
-            }
-        }
+  Refresh-FontCache; if(-not $NoRestartExplorer){ Restart-Explorer }
 
-        $combinedEntries = @($newEntries + $existingEntries)
-        $uniqueEntries = New-Object System.Collections.Generic.HashSet[string]
-        $finalEntries = New-Object System.Collections.Generic.List[string]
+  Write-Log ("Completed. New families: {0}. Primary system font: {1}" -f ($newFamilies -join ", "), $primary)
+  Write-Log ("Temporary working folder: {0}" -f $TempRoot)
+  Write-Log "Note: Some UI areas may still require sign out or reboot to fully apply."
 
-        foreach ($entry in $combinedEntries) {
-            if ([string]::IsNullOrWhiteSpace($entry)) {
-                continue
-            }
-            if ($uniqueEntries.Add($entry)) {
-                [void]$finalEntries.Add($entry)
-            }
-        }
-
-        if ($finalEntries.Count -gt 0) {
-            Set-ItemProperty -Path $fontLinkKey -Name $baseFamily -Type MultiString -Value $finalEntries
-            Write-LogMessage ("FontLink updated for '{0}' with {1} entries" -f $baseFamily, $finalEntries.Count)
-        }
-
-        Start-HumanLikeDelay
-    }
+} catch {
+  Write-Log ("ERROR: {0}" -f $_.Exception.Message)
+  Write-Log ("Registry backup (if created): {0}" -f $BackupDir)
+  exit 1
+} finally {
+  if($Cleanup){
+    Write-Log "Cleaning up temporary files..."
+    try{ if(Test-Path $TempRoot){ Remove-Item -Recurse -Force $TempRoot -ErrorAction SilentlyContinue } } catch {}
+  }
 }
-
-function Set-SymbolFontMapping {
-    <#
-    .SYNOPSIS
-        Maps Segoe UI Symbol to a coverage font family
-    .PARAMETER TargetFamily
-        Font family to map Segoe UI Symbol to
-    #>
-    param([string]$TargetFamily)
-
-    if ([string]::IsNullOrWhiteSpace($TargetFamily)) {
-        return
-    }
-
-    $fontSubstitutesKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
-    try {
-        New-Item -Path $fontSubstitutesKey -Force | Out-Null
-        New-ItemProperty -Path $fontSubstitutesKey -Name 'Segoe UI Symbol' -Value $TargetFamily -PropertyType String -Force | Out-Null
-        Write-LogMessage ("Mapped 'Segoe UI Symbol' -> {0}" -f $TargetFamily)
-    }
-    catch {
-        # Silently continue if mapping fails
-    }
-}
-
-#region Chromium Browser Configuration
-
-function Stop-ChromiumProcesses {
-    <#
-    .SYNOPSIS
-        Stops running Chromium-based browser processes
-    #>
-    $processNames = @('chrome', 'msedge', 'chrome.exe', 'msedge.exe')
-    foreach ($processName in $processNames) {
-        try {
-            Get-Process $processName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        }
-        catch {
-            # Silently continue if process stop fails
-        }
-    }
-}
-
-function Get-ChromiumUserDataDirectories {
-    <#
-    .SYNOPSIS
-        Discovers Chromium user data directories from running processes and standard locations
-    #>
-    $userDataRoots = New-Object System.Collections.Generic.List[string]
-
-    # Check running processes for custom user data directories
-    try {
-        $chromiumProcesses = Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'"
-        foreach ($process in $chromiumProcesses) {
-            $commandLine = $process.CommandLine
-            if ($commandLine -and ($commandLine -match '--user-data-dir=(?:"([^"]+)"|(\S+))')) {
-                $userDataDir = if ($matches[1]) { $matches[1] } else { $matches[2] }
-                if (Test-Path $userDataDir) {
-                    $userDataRoots.Add($userDataDir) | Out-Null
-                }
-            }
-        }
-    }
-    catch {
-        # Continue if process enumeration fails
-    }
-
-    # Check standard user directories
-    $userDirectories = Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -notmatch '^(All Users|Default|Default User|Public|DefaultAppPool)$'
-    }
-
-    $chromeVariants = @('Google\Chrome\User Data', 'Google\Chrome Beta\User Data', 'Google\Chrome Dev\User Data', 'Google\Chrome SxS\User Data', 'Chromium\User Data')
-    $edgeVariants = @('Microsoft\Edge\User Data', 'Microsoft\Edge Beta\User Data', 'Microsoft\Edge Dev\User Data', 'Microsoft\Edge SxS\User Data')
-
-    foreach ($userDir in $userDirectories) {
-        foreach ($browserPath in ($chromeVariants + $edgeVariants)) {
-            foreach ($appDataType in @('Local', 'Roaming')) {
-                $fullPath = Join-Path $userDir.FullName ("AppData\{0}\{1}" -f $appDataType, $browserPath)
-                if (Test-Path $fullPath) {
-                    $userDataRoots.Add($fullPath) | Out-Null
-                }
-            }
-        }
-    }
-
-    # Check current user's standard locations
-    $standardPaths = @(
-        (Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data'),
-        (Join-Path $env:LOCALAPPDATA 'Chromium\User Data'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'),
-        (Join-Path $env:APPDATA 'Google\Chrome\User Data'),
-        (Join-Path $env:APPDATA 'Microsoft\Edge\User Data')
-    )
-
-    foreach ($path in $standardPaths) {
-        if (Test-Path $path) {
-            $userDataRoots.Add($path) | Out-Null
-        }
-    }
-
-    return (@($userDataRoots) | Where-Object { Test-Path $_ } | Select-Object -Unique)
-}
-
-function Set-ChromiumFontPreferences {
-    <#
-    .SYNOPSIS
-        Updates Chromium browser font preferences for all profiles
-    .PARAMETER UserDataRoots
-        Array of user data root directories
-    .PARAMETER SerifFamily
-        Serif font family name
-    .PARAMETER SansSerifFamily
-        Sans-serif font family name
-    .PARAMETER MonospaceFamily
-        Monospace font family name
-    #>
-    param(
-        [string[]]$UserDataRoots,
-        [string]$SerifFamily,
-        [string]$SansSerifFamily,
-        [string]$MonospaceFamily
-    )
-
-    foreach ($userDataRoot in $UserDataRoots) {
-        $profileDirectories = Get-ChildItem -Path $userDataRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -match '^(Default|Profile \d+|Guest Profile|System Profile)$'
-        }
-
-        foreach ($profileDir in $profileDirectories) {
-            $preferencesFile = Join-Path $profileDir.FullName 'Preferences'
-            if (-not (Test-Path $preferencesFile)) {
-                continue
-            }
-
-            try {
-                $timestamp = Get-Date -Format yyyyMMdd-HHmmss
-                Copy-Item $preferencesFile ($preferencesFile + ".bak-$timestamp") -Force -ErrorAction SilentlyContinue
-
-                $preferencesJson = Get-Content $preferencesFile -Raw -ErrorAction Stop | ConvertFrom-Json
-
-                # Initialize fonts object if it doesn't exist
-                if (-not $preferencesJson.fonts) {
-                    $preferencesJson | Add-Member -NotePropertyName fonts -NotePropertyValue (@{})
-                }
-
-                # Initialize font category objects
-                foreach ($category in @('serif', 'sansserif', 'standard', 'fixed', 'cursive', 'fantasy')) {
-                    if (-not $preferencesJson.fonts.$category) {
-                        $preferencesJson.fonts.$category = @{}
-                    }
-                }
-
-                # Set font preferences
-                $preferencesJson.fonts.serif.Zyyy = $SerifFamily
-                $preferencesJson.fonts.standard.Zyyy = $SerifFamily
-                $preferencesJson.fonts.sansserif.Zyyy = $SansSerifFamily
-                $preferencesJson.fonts.fixed.Zyyy = $MonospaceFamily
-
-                if (-not $preferencesJson.fonts.cursive.Zyyy) {
-                    $preferencesJson.fonts.cursive.Zyyy = $SansSerifFamily
-                }
-                if (-not $preferencesJson.fonts.fantasy.Zyyy) {
-                    $preferencesJson.fonts.fantasy.Zyyy = $SansSerifFamily
-                }
-
-                $preferencesJson | ConvertTo-Json -Depth 100 | Set-Content -Path $preferencesFile -Encoding UTF8
-                Write-LogMessage ("Updated Chromium preferences: {0}" -f $preferencesFile)
-            }
-            catch {
-                Write-LogMessage ("Failed to update Chromium preferences {0}: {1}" -f $preferencesFile, $_.Exception.Message)
-            }
-
-            Start-HumanLikeDelay
-        }
-    }
-}
-
-#region System Maintenance
-
-function Update-WindowsFontCache {
-    <#
-    .SYNOPSIS
-        Refreshes Windows font cache by restarting font services and clearing cache files
-    #>
-    Write-LogMessage "Refreshing Windows Font Cache..."
-
-    $fontServices = @('FontCache', 'FontCache3.0.0.0')
-    foreach ($service in $fontServices) {
-        try {
-            Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-        }
-        catch {
-            # Continue if service stop fails
-        }
-    }
-
-    $serviceCacheDir = "C:\Windows\ServiceProfiles\LocalService\AppData\Local\FontCache"
-    $userCacheDir = Join-Path $env:LOCALAPPDATA "FontCache"
-
-    foreach ($cacheDir in @($serviceCacheDir, $userCacheDir)) {
-        try {
-            if (Test-Path $cacheDir) {
-                Get-ChildItem $cacheDir -Filter "*FontCache*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-            }
-        }
-        catch {
-            # Continue if cache cleanup fails
-        }
-    }
-
-    foreach ($service in $fontServices) {
-        try {
-            Start-Service -Name $service -ErrorAction SilentlyContinue
-        }
-        catch {
-            # Continue if service start fails
-        }
-    }
-
-    Start-HumanLikeDelay
-}
-
-function Restart-WindowsExplorer {
-    <#
-    .SYNOPSIS
-        Restarts Windows Explorer to apply font changes
-    #>
-    Write-LogMessage "Restarting Explorer..."
-    Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Process explorer.exe
-}
-
-function Backup-FontRegistryKeys {
-    <#
-    .SYNOPSIS
-        Creates backup of font-related registry keys
-    #>
-    Write-LogMessage "Backing up registry keys..."
-
-    $registryKeys = @(
-        'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes',
-        'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink',
-        'HKCU\Control Panel\Desktop'
-    )
-
-    foreach ($registryKey in $registryKeys) {
-        $safeKeyName = ($registryKey -replace '[\\/:*?"<>| ]', '_')
-        $backupFile = Join-Path $script:BackupDir "$safeKeyName.reg"
-        & reg.exe export $registryKey $backupFile /y | Out-Null
-    }
-
-    Start-HumanLikeDelay
-}
-
-function Restore-DefaultFontSettings {
-    <#
-    .SYNOPSIS
-        Restores system font mappings to Windows defaults
-    #>
-    Write-LogMessage "Restoring system font mappings to defaults..."
-
-    $fontSubstitutesKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
-    Remove-ItemProperty -Path $fontSubstitutesKey -Name 'Segoe UI' -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $fontSubstitutesKey -Name 'MS Shell Dlg' -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $fontSubstitutesKey -Name 'MS Shell Dlg 2' -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $fontSubstitutesKey -Name 'Segoe UI Symbol' -ErrorAction SilentlyContinue
-}
-
-#endregion
-
-#region Main Execution Logic
-
-function Invoke-FontInstallationProcess {
-    <#
-    .SYNOPSIS
-        Main font installation process
-    #>
-
-    # Get random font families
-    $randomFamilies = Select-RandomFontFamilies -Count $FontsPerRun -IncludeMonospace:$IncludeMonospace
-    if (-not $randomFamilies -or $randomFamilies.Count -eq 0) {
-        # Fallback to OFL directories
-        $oflDirectories = Get-GoogleFontsOflDirectoriesFromGitHub
-        if (-not $oflDirectories -or $oflDirectories.Count -eq 0) {
-            $oflDirectories = Get-GoogleFontsOflDirectoriesFromJsDelivr
-        }
-        if (-not $oflDirectories -or $oflDirectories.Count -eq 0) {
-            throw "No Google Fonts OFL entries found."
-        }
-
-        $random = New-Object System.Random
-        $randomFamilies = @()
-        while ($randomFamilies.Count -lt $FontsPerRun) {
-            $candidate = ($oflDirectories | Sort-Object { $random.Next() } | Select-Object -First 1)
-            if ($randomFamilies -notcontains $candidate) {
-                $randomFamilies += $candidate
-            }
-        }
-    }
-
-    Write-LogMessage ("Selected font families: {0}" -f ($randomFamilies -join ", "))
-
-    $installedFamilies = New-Object System.Collections.Generic.HashSet[string]
-
-    # Process each font family
-    foreach ($familyName in $randomFamilies) {
-        $safeName = ($familyName -replace '[^a-zA-Z0-9\-]', '_')
-        $extractDirectory = Join-Path $script:ExtractRoot $safeName
-        if (-not (Test-Path $extractDirectory)) {
-            New-Item -ItemType Directory -Path $extractDirectory | Out-Null
-        }
-
-        $installationSuccess = $false
-
-        # Try Google ZIP download (often fails due to API changes, so we skip to OFL)
-        try {
-            $downloadUrl = Get-GoogleFontsDownloadUrl -FamilyName $familyName
-            $cachedZipFile = Get-CachedFileOrDownload -Url $downloadUrl -PreferredFileName ($safeName + ".zip") -Accept "application/zip, */*" -Referer "https://fonts.google.com/"
-            Write-LogMessage ("Downloaded file: {0}, Size: {1} bytes" -f $cachedZipFile, (Get-Item $cachedZipFile -ErrorAction SilentlyContinue).Length)
-            if (Test-ValidZipFile -ZipPath $cachedZipFile) {
-                Write-LogMessage ("ZIP file is valid, extracting to: {0}" -f $extractDirectory)
-                Expand-ZipArchive -ZipPath $cachedZipFile -OutputDirectory $extractDirectory
-                $installationSuccess = $true
-                Write-LogMessage ("ZIP extraction completed for {0}" -f $familyName)
-            } else {
-                Write-LogMessage ("ZIP file validation failed for {0}, falling back to OFL" -f $familyName)
-            }
-        }
-        catch {
-            Write-LogMessage ("ZIP download failed for {0}: {1}, falling back to OFL" -f $familyName, $_.Exception.Message)
-        }
-
-        # Fallback to OFL directory (skip for now due to API issues)
-        if (-not $installationSuccess) {
-            Write-LogMessage ("Skipping OFL fallback for {0} due to API limitations" -f $familyName)
-            # For now, we'll skip the complex OFL download and just use coverage fonts
-        }
-
-        # Try extra URLs if provided
-        if (-not $installationSuccess -and $ExtraUrls) {
-            if (Install-FontFilesFromUrls -Urls $ExtraUrls -OutputDirectory $extractDirectory) {
-                $installationSuccess = $true
-            }
-        }
-
-        # Try local folder if provided
-        if (-not $installationSuccess -and $LocalFolder -and (Test-Path $LocalFolder)) {
-            Copy-Item -Path (Join-Path $LocalFolder '*') -Destination $extractDirectory -Recurse -Force -ErrorAction SilentlyContinue
-            $installationSuccess = $true
-        }
-
-        # Install fonts if we have any
-        $fontFiles = Get-UiSuitableFontFiles -FolderPath $extractDirectory
-        if (-not $installationSuccess -or -not $fontFiles -or $fontFiles.Count -eq 0) {
-            Write-LogMessage ("No usable fonts found for {0}. Skipping." -f $familyName)
-            continue
-        }
-
-        [void](Install-FontFileSet -FontFiles $fontFiles)
-        foreach ($detectedFamily in (Get-FontFamilyNamesFromFiles -FontFiles $fontFiles)) {
-            [void]$installedFamilies.Add($detectedFamily)
-        }
-        [void]$installedFamilies.Add($familyName)
-    }
-
-    return @($installedFamilies)
-}
-
-function Invoke-CoverageFontInstallation {
-    <#
-    .SYNOPSIS
-        Ensures at least one coverage font is installed
-    .PARAMETER InstalledFamilies
-        Currently installed font families
-    #>
-    param([string[]]$InstalledFamilies)
-
-    $coverageInstalled = @()
-    foreach ($coverageFamily in $script:CoverageFamilies) {
-        if ($InstalledFamilies -contains $coverageFamily) {
-            $coverageInstalled += $coverageFamily
-        }
-    }
-
-    if ($coverageInstalled.Count -eq 0) {
-        Write-LogMessage "No coverage fonts installed, using system fonts as fallback"
-        # For now, just add some common system fonts as coverage
-        $systemFonts = @("Arial", "Times New Roman", "Courier New")
-        return $InstalledFamilies + $systemFonts
-    }
-
-    return $InstalledFamilies
-}
-
-#region Main Script Execution
-
-try {
-    # Initialize environment
-    Assert-AdminPrivileges
-    Initialize-RequiredDirectories
-    Write-LogMessage ("Log file: {0}" -f $script:LogFile)
-
-    # Handle restore default mode
-    if ($RestoreDefault) {
-        Restore-DefaultFontSettings
-        Update-WindowsFontCache
-        if (-not $NoRestartExplorer) {
-            Restart-WindowsExplorer
-        }
-        Write-LogMessage "Done. System font reverted. Sign out or reboot may be required."
-        if ($Cleanup) {
-            if (Test-Path $script:TempRoot) {
-                Remove-Item -Recurse -Force $script:TempRoot -ErrorAction SilentlyContinue
-            }
-        }
-        exit 0
-    }
-
-    # Install fonts
-    $installedFamilies = Invoke-FontInstallationProcess
-    $allInstalledFamilies = Invoke-CoverageFontInstallation -InstalledFamilies $installedFamilies
-
-    if ($allInstalledFamilies.Count -eq 0) {
-        throw "No font families were installed this session."
-    }
-
-    Write-LogMessage ("New families this run: {0}" -f ($allInstalledFamilies -join ", "))
-
-    # Select primary font (non-symbol font preferred)
-    $primaryFont = ($allInstalledFamilies | Where-Object { $_ -notmatch '(?i)symbols|emoji|dingbats|math' } | Get-Random)
-    if (-not $primaryFont) {
-        $primaryFont = ($allInstalledFamilies | Get-Random)
-    }
-
-    # Apply system configuration
-    Write-LogMessage "Backing up registry and applying system mappings..."
-    Backup-FontRegistryKeys
-    Set-SystemDefaultFont -FontFamily $primaryFont
-
-    # Configure FontLink with coverage fonts prioritized
-    $coverageFirst = @()
-    foreach ($coverageFamily in $script:CoverageFamilies) {
-        if ($allInstalledFamilies -contains $coverageFamily) {
-            $coverageFirst += $coverageFamily
-        }
-    }
-    Add-FontLinkEntries -FamiliesToPrioritize $allInstalledFamilies -CoverageFirst $coverageFirst
-
-    # Configure symbol font substitution
-    if (-not $NoSymbolSubstitute) {
-        $symbolFont = ($script:CoverageFamilies | Where-Object { $allInstalledFamilies -contains $_ } | Select-Object -First 1)
-        if ($symbolFont) {
-            Set-SymbolFontMapping -TargetFamily $symbolFont
-        }
-    }
-
-    # Update browser preferences
-    Stop-ChromiumProcesses
-    $chromiumDataRoots = Get-ChromiumUserDataDirectories
-    $serifFont = ($allInstalledFamilies | Where-Object { $_ -match '(?i)noto serif|serif' } | Select-Object -First 1)
-    if (-not $serifFont) { $serifFont = $primaryFont }
-
-    $sansFont = ($allInstalledFamilies | Where-Object { $_ -match '(?i)noto sans|inter|manrope|public sans' } | Select-Object -First 1)
-    if (-not $sansFont) { $sansFont = $primaryFont }
-
-    $monoFont = ($allInstalledFamilies | Where-Object { $_ -match '(?i)mono|code' } | Select-Object -First 1)
-    if (-not $monoFont) { $monoFont = $primaryFont }
-
-    if ($chromiumDataRoots) {
-        Set-ChromiumFontPreferences -UserDataRoots $chromiumDataRoots -SerifFamily $serifFont -SansSerifFamily $sansFont -MonospaceFamily $monoFont
-    }
-
-    # Finalize system changes
-    Update-WindowsFontCache
-    if (-not $NoRestartExplorer) {
-        Restart-WindowsExplorer
-    }
-
-    Write-LogMessage ("Completed. New families: {0}. Primary system font: {1}" -f ($allInstalledFamilies -join ", "), $primaryFont)
-    Write-LogMessage ("Temporary working folder: {0}" -f $script:TempRoot)
-    Write-LogMessage "Note: Some UI areas may still require sign out or reboot to fully apply."
-
-}
-catch {
-    Write-LogMessage ("ERROR: {0}" -f $_.Exception.Message)
-    Write-LogMessage ("Registry backup (if created): {0}" -f $script:BackupDir)
-    exit 1
-}
-finally {
-    if ($Cleanup) {
-        Write-LogMessage "Cleaning up temporary files..."
-        try {
-            if (Test-Path $script:TempRoot) {
-                Remove-Item -Recurse -Force $script:TempRoot -ErrorAction SilentlyContinue
-            }
-        }
-        catch {
-            # Silently continue if cleanup fails
-        }
-    }
-}
-
-#endregion
