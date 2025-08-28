@@ -45,7 +45,7 @@ param(
 )
 
 # ============================================================================
-# GLOBAL CONFIGURATION
+# GLOBAL CONFIGURATION & EARLY LOGGING SETUP
 # ============================================================================
 
 $Global:Config = @{
@@ -55,10 +55,52 @@ $Global:Config = @{
     RegistryPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
     UserRegistryPath = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
     StateFile = "$env:TEMP\FontRandomizer\state.json"
-    LogFile = "$env:TEMP\FontRandomizer\log.txt"
+    LogFile = "$env:USERPROFILE\Downloads\FontRandomizer_Full_Log.txt"
+    ErrorLogFile = "$env:USERPROFILE\Downloads\FontRandomizer_Errors.txt"
     MaxRetries = 3
     DelayBetweenInstalls = @(2, 8)  # Random delay 2-8 seconds
 }
+
+# Initialize logging immediately
+function Initialize-EarlyLogging {
+    try {
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+        # Create main log with header
+        $logHeader = @"
+========================================================
+Font Fingerprint Randomizer - Complete Execution Log
+Started: $timestamp
+PowerShell Version: $($PSVersionTable.PSVersion)
+OS: $([System.Environment]::OSVersion.VersionString)
+User: $env:USERNAME
+Working Directory: $(Get-Location)
+========================================================
+
+"@
+        $logHeader | Set-Content $Global:Config.LogFile -ErrorAction SilentlyContinue
+
+        # Create error log
+        $errorHeader = @"
+========================================================
+Font Fingerprint Randomizer - Error Log
+Started: $timestamp
+========================================================
+
+"@
+        $errorHeader | Set-Content $Global:Config.ErrorLogFile -ErrorAction SilentlyContinue
+
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Logging initialized in Downloads folder" -ForegroundColor Green
+        Write-Host "  Main log: $($Global:Config.LogFile)" -ForegroundColor Gray
+        Write-Host "  Error log: $($Global:Config.ErrorLogFile)" -ForegroundColor Gray
+
+    } catch {
+        Write-Host "WARNING: Could not initialize logging: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Call early logging setup
+Initialize-EarlyLogging
 
 # Font Collections Database - Using direct GitHub/CDN links for reliability
 $Global:FontCollections = @{
@@ -160,11 +202,20 @@ function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] [$Level] $Message"
-    
-    if ($Global:Config.LogFile) {
+
+    # Always try to write to log files
+    try {
         Add-Content -Path $Global:Config.LogFile -Value $logEntry -ErrorAction SilentlyContinue
+
+        # Write errors to separate error log
+        if ($Level -eq "ERROR") {
+            Add-Content -Path $Global:Config.ErrorLogFile -Value $logEntry -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Silently continue if logging fails
     }
-    
+
+    # Console output with colors
     switch ($Level) {
         "ERROR" { Write-Host $logEntry -ForegroundColor Red }
         "WARN"  { Write-Host $logEntry -ForegroundColor Yellow }
@@ -522,25 +573,36 @@ function Test-FontFingerprint {
 # ============================================================================
 
 function Main {
+    $startTime = Get-Date
     try {
-        Write-Host "🎯 Font Fingerprint Randomizer v$($Global:Config.ScriptVersion)" -ForegroundColor Cyan
+        Write-Log "=== SCRIPT EXECUTION STARTED ===" -Level "INFO"
+        Write-Log "Script version: $($Global:Config.ScriptVersion)" -Level "INFO"
+        Write-Log "PowerShell version: $($PSVersionTable.PSVersion)" -Level "INFO"
+        Write-Log "Execution policy: $(Get-ExecutionPolicy)" -Level "INFO"
+        Write-Log "Current location: $(Get-Location)" -Level "INFO"
+        Write-Log "Parameters: Profile=$Profile, FontCount=$FontCount, TestFingerprint=$TestFingerprint, Cleanup=$Cleanup" -Level "INFO"
+
+        Write-Host "Font Fingerprint Randomizer v$($Global:Config.ScriptVersion)" -ForegroundColor Cyan
         Write-Host "=" * 60 -ForegroundColor Cyan
 
         # Check admin privileges (recommended but not required)
         $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
         if (-not $isAdmin) {
-            Write-Host "⚠️  Running without admin privileges - using user-level font variations" -ForegroundColor Yellow
+            Write-Host "Running without admin privileges - using user-level font variations" -ForegroundColor Yellow
             Write-Log "Running in user mode (no admin privileges)" -Level "WARN"
         } else {
-            Write-Host "✅ Running with admin privileges - full system access" -ForegroundColor Green
+            Write-Host "Running with admin privileges - full system access" -ForegroundColor Green
             Write-Log "Running in admin mode" -Level "SUCCESS"
         }
 
+        Write-Log "Initializing environment..." -Level "INFO"
         Initialize-Environment
+        Write-Log "Environment initialization completed" -Level "SUCCESS"
 
         # Handle cleanup mode
         if ($Cleanup) {
-            Write-Host "🧹 Cleanup mode activated" -ForegroundColor Yellow
+            Write-Host "Cleanup mode activated" -ForegroundColor Yellow
+            Write-Log "Cleanup mode activated" -Level "INFO"
             # TODO: Implement cleanup functionality
             Write-Log "Cleanup completed" -Level "SUCCESS"
             return
@@ -632,11 +694,23 @@ function Main {
         }
 
         if ($TestFingerprint) {
+            Write-Log "Opening browserleaks.com for fingerprint testing" -Level "INFO"
             Test-FontFingerprint
         }
 
+        Write-Log "=== SCRIPT EXECUTION COMPLETED SUCCESSFULLY ===" -Level "SUCCESS"
+        Write-Log "Total execution time: $((Get-Date) - $startTime)" -Level "INFO"
+
     } catch {
-        Write-Log "Critical error: $($_.Exception.Message)" -Level "ERROR"
+        $errorDetails = @"
+Critical error occurred:
+Message: $($_.Exception.Message)
+Stack Trace: $($_.Exception.StackTrace)
+Script Line: $($_.InvocationInfo.ScriptLineNumber)
+Position: $($_.InvocationInfo.PositionMessage)
+"@
+        Write-Log $errorDetails -Level "ERROR"
+        Write-Log "=== SCRIPT EXECUTION FAILED ===" -Level "ERROR"
         throw
     }
 }
