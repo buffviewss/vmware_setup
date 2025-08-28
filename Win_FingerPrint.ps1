@@ -26,19 +26,22 @@ param(
     [Parameter(Mandatory=$false)]
     [ValidateSet("Random", "Designer", "Developer", "Gamer", "Business", "Student", "Minimal")]
     [string]$Profile = "Random",
-    
+
     [Parameter(Mandatory=$false)]
     [ValidateRange(5, 50)]
-    [int]$FontCount = 20,
-    
+    [int]$FontCount = 15,
+
     [Parameter(Mandatory=$false)]
-    [switch]$TestFingerprint,
-    
+    [switch]$TestFingerprint = $true,
+
     [Parameter(Mandatory=$false)]
     [switch]$Cleanup,
-    
+
     [Parameter(Mandatory=$false)]
-    [switch]$Verbose
+    [switch]$Verbose,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$QuickRun = $true
 )
 
 # ============================================================================
