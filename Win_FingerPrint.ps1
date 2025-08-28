@@ -103,9 +103,11 @@ Write-Log "Hoàn thành cài đặt $fontCount font mới từ Google Fonts!"
 
 # Khởi động lại explorer để áp dụng (nếu cần)
 try {
+    Write-Log "Đang khởi động lại explorer..."
     Stop-Process -Name explorer -Force
-    Start-Process explorer
+    Start-Sleep -Seconds 2
+    Start-Process explorer.exe
     Write-Log "Khởi động lại explorer thành công."
 } catch {
-    Write-Log "Không thể khởi động lại explorer."
+    Write-Log "Không thể khởi động lại explorer. Bạn hãy nhấn Ctrl+Shift+Esc, vào File > Run new task, gõ explorer.exe để mở lại giao diện."
 }
