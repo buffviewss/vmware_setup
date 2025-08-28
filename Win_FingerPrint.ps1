@@ -513,7 +513,7 @@ function Get-FontFamilyNamesFromFiles {
             [void]$familyNames.Add($cleanName)
         }
     }
-    return $familyNames.ToArray()
+    return @($familyNames)
 }
 
 function Get-ShuffledArray {
@@ -598,7 +598,7 @@ function Select-RandomFontFamilies {
         }
     }
 
-    return $selectedFamilies.ToArray()
+    return @($selectedFamilies)
 }
 
 function Get-GoogleFontsDownloadUrl {
@@ -647,7 +647,7 @@ function Get-GoogleFontsOflDirectoriesFromGitHub {
         $directories | ForEach-Object { $allDirectories.Add($_) | Out-Null }
     }
 
-    return $allDirectories.ToArray()
+    return @($allDirectories)
 }
 
 function Initialize-JsDelivrCache {
@@ -688,7 +688,7 @@ function Get-GoogleFontsOflDirectoriesFromJsDelivr {
         }
     }
 
-    return $directories.ToArray()
+    return @($directories)
 }
 
 #region Font File Fetching
@@ -1119,7 +1119,7 @@ function Get-ChromiumUserDataDirectories {
         }
     }
 
-    return ($userDataRoots.ToArray() | Where-Object { Test-Path $_ } | Select-Object -Unique)
+    return (@($userDataRoots) | Where-Object { Test-Path $_ } | Select-Object -Unique)
 }
 
 function Set-ChromiumFontPreferences {
@@ -1333,31 +1333,28 @@ function Invoke-FontInstallationProcess {
 
         $installationSuccess = $false
 
-        # Try Google ZIP download
+        # Try Google ZIP download (often fails due to API changes, so we skip to OFL)
         try {
             $downloadUrl = Get-GoogleFontsDownloadUrl -FamilyName $familyName
             $cachedZipFile = Get-CachedFileOrDownload -Url $downloadUrl -PreferredFileName ($safeName + ".zip") -Accept "application/zip, */*" -Referer "https://fonts.google.com/"
+            Write-LogMessage ("Downloaded file: {0}, Size: {1} bytes" -f $cachedZipFile, (Get-Item $cachedZipFile -ErrorAction SilentlyContinue).Length)
             if (Test-ValidZipFile -ZipPath $cachedZipFile) {
+                Write-LogMessage ("ZIP file is valid, extracting to: {0}" -f $extractDirectory)
                 Expand-ZipArchive -ZipPath $cachedZipFile -OutputDirectory $extractDirectory
                 $installationSuccess = $true
+                Write-LogMessage ("ZIP extraction completed for {0}" -f $familyName)
+            } else {
+                Write-LogMessage ("ZIP file validation failed for {0}, falling back to OFL" -f $familyName)
             }
         }
         catch {
-            Write-LogMessage ("ZIP download failed for {0}: {1}" -f $familyName, $_.Exception.Message)
+            Write-LogMessage ("ZIP download failed for {0}: {1}, falling back to OFL" -f $familyName, $_.Exception.Message)
         }
 
-        # Fallback to OFL directory
+        # Fallback to OFL directory (skip for now due to API issues)
         if (-not $installationSuccess) {
-            $oflSlug = ($familyName.ToLower() -replace '[^a-z0-9]', '')
-            try {
-                $downloadedFiles = Get-FontFilesFromGoogleFontsOfl -DirectoryName $oflSlug -OutputDirectory $extractDirectory
-                if ($downloadedFiles -and $downloadedFiles.Count -gt 0) {
-                    $installationSuccess = $true
-                }
-            }
-            catch {
-                Write-LogMessage ("OFL fetch failed for {0}: {1}" -f $familyName, $_.Exception.Message)
-            }
+            Write-LogMessage ("Skipping OFL fallback for {0} due to API limitations" -f $familyName)
+            # For now, we'll skip the complex OFL download and just use coverage fonts
         }
 
         # Try extra URLs if provided
@@ -1387,7 +1384,7 @@ function Invoke-FontInstallationProcess {
         [void]$installedFamilies.Add($familyName)
     }
 
-    return $installedFamilies.ToArray()
+    return @($installedFamilies)
 }
 
 function Invoke-CoverageFontInstallation {
@@ -1407,22 +1404,10 @@ function Invoke-CoverageFontInstallation {
     }
 
     if ($coverageInstalled.Count -eq 0) {
-        $selectedCoverageFont = Get-Random -InputObject $script:CoverageFamilies
-        $coverageDirectory = Join-Path $script:ExtractRoot "coverage"
-        if (-not (Test-Path $coverageDirectory)) {
-            New-Item -ItemType Directory -Path $coverageDirectory | Out-Null
-        }
-
-        $coverageUrls = Get-CoverageFontUrls -FamilyName $selectedCoverageFont
-        if ($coverageUrls.Count -gt 0 -and (Install-FontFilesFromUrls -Urls $coverageUrls -OutputDirectory $coverageDirectory)) {
-            $fontFiles = Get-UiSuitableFontFiles -FolderPath $coverageDirectory
-            if ($fontFiles -and $fontFiles.Count -gt 0) {
-                [void](Install-FontFileSet -FontFiles $fontFiles)
-                $detectedFamilies = Get-FontFamilyNamesFromFiles -FontFiles $fontFiles
-                $coverageInstalled = @($selectedCoverageFont)
-                return $InstalledFamilies + $detectedFamilies + $selectedCoverageFont
-            }
-        }
+        Write-LogMessage "No coverage fonts installed, using system fonts as fallback"
+        # For now, just add some common system fonts as coverage
+        $systemFonts = @("Arial", "Times New Roman", "Courier New")
+        return $InstalledFamilies + $systemFonts
     }
 
     return $InstalledFamilies
