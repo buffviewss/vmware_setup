@@ -4,10 +4,9 @@
    - Ghi Registry theo Face Name (TTF/OTF; TTC fallback)
    - Đổi FontLink/SystemLink theo profile (JP/SC/KR) => đổi Unicode glyphs
    - 3 hashes để kiểm: InventoryHash, FallbackChainHash + (đếm FaceNames)
-   - Tuyệt đối KHÔNG xoá font hệ thống; chỉ thêm font mới.
+   - Không xoá font hệ thống; chỉ thêm font mới.
 =================================================================== #>
 
-# ============ Admin check ============
 if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
     Write-Host "ERROR: Please run PowerShell as Administrator!" -ForegroundColor Red
@@ -15,7 +14,6 @@ if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     exit 1
 }
 
-# ============ Globals ============
 $TempDir  = "$env:TEMP\FontRotator"
 $FontsDir = "$env:SystemRoot\Fonts"
 if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
@@ -23,7 +21,6 @@ if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force 
 function Write-Status { param([string]$m,[string]$c="Cyan"); $ts=Get-Date -Format "HH:mm:ss"; Write-Host "[$ts] $m" -ForegroundColor $c }
 function Head32 { param($s); if ($s -and $s.Length -ge 32) { return $s.Substring(0,32) } elseif ($s) { return $s } else { return "NA" } }
 
-# ============ Trusted Font Sources ============
 $FontDB = @{
   Western = @{
     "Inter"         = "https://github.com/rsms/inter/releases/download/v3.19/Inter-3.19.zip"
@@ -65,7 +62,6 @@ $FontDB = @{
   }
 }
 
-# ============ Helpers ============
 function Download-File {
   param([string]$Url,[string]$OutFile,[int]$MaxRetry=3,[int]$TimeoutSec=300)
   for ($i=1; $i -le $MaxRetry; $i++) {
@@ -145,7 +141,6 @@ function Install-SingleFontFile { param([string]$FilePath,[string]$FallbackName=
     $fontFile=Get-Item $FilePath
     $dest=Join-Path $FontsDir $fontFile.Name
     if (Test-Path $dest) { Write-Status "Exists: $($fontFile.Name)" "Gray"; return $null }
-
     Copy-Item -Path $FilePath -Destination $dest -Force
 
     $ext=$fontFile.Extension.ToLower()
@@ -277,14 +272,11 @@ function Find-PairByFacePriority {
   return $null
 }
 
-# ======================= MAIN =======================
-
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
 Write-Host "   ADVANCED FONT FINGERPRINT ROTATOR v3.1 (PS 5.x SAFE)" -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Green
 
-# Baseline
 $beforeList   = Get-CurrentFonts
 $beforeInv    = Get-FontInventoryHash
 $beforeFall   = Get-FallbackChainHash
@@ -293,22 +285,18 @@ Write-Status ("Current fonts: {0}" -f $beforeList.Count) "Cyan"
 Write-Status ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
 Write-Status ("FallbackChain:  {0}..." -f (Head32 $beforeFall)) "Cyan"
 
-# 1) Download & install random fonts (5..8)
 $targetCount = Get-Random -Minimum 5 -Maximum 9
 Write-Host "`n[1/3] Download & install random fonts ($targetCount)..." -ForegroundColor Yellow
 $wish = Pick-RandomFonts -Count $targetCount
 $installedMeta=@()
 foreach($item in $wish){ $r = Install-FromUrl -Name $item.Name -Url $item.Url; if ($r.Count -gt 0) { $installedMeta += $r } }
 
-# Ensure core unicode packs present
 foreach($core in @("NotoSymbols","NotoSansMath","NotoColorEmoji")){
   $url=$FontDB.Unicode[$core]
   if ($url) { $null = Install-FromUrl -Name $core -Url $url }
 }
 
-# 2) Random Unicode fallback profile (JP/SC/KR)
 Write-Host "`n[2/3] Configure Unicode glyph fallback (SystemLink)..." -ForegroundColor Yellow
-
 $bk1="$TempDir\SystemLink_backup.reg"
 $bk2="$TempDir\FontSub_backup.reg"
 if (!(Test-Path $bk1)) { & reg export "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink" $bk1 /y | Out-Null }
@@ -352,7 +340,6 @@ if ($segEmojiPairs.Count -gt 0) { Prepend-FontLink -BaseFamily "Segoe UI Emoji" 
 
 Refresh-Fonts
 
-# 3) Results
 Write-Host "`n[3/3] Results & verification..." -ForegroundColor Yellow
 $afterList  = Get-CurrentFonts
 $afterInv   = Get-FontInventoryHash
