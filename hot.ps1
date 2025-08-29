@@ -1,32 +1,31 @@
-# Font Fingerprint Rotator - Lite EU/US + Unicode (max 5 fonts / run)
-# Focus: đổi cả Inventory (Font Metrics) + Fallback (Unicode Glyphs)
-# - Chỉ cài tối đa 5 font/lần (2 EU/US + 3 Unicode), ưu tiên Unicode
-# - Link TTF nhỏ, đã lọc 404; có fallback URL cho Unicode khi khả dụng
-# - Không xóa font hệ thống; chỉ thêm mới + chỉnh FontLink/Substitute an toàn
-# - Không mở trình duyệt; có log tại ~/Downloads/FontRotator/log.txt
+# ================================
+# Font Fingerprint Rotator (FULL, Emoji ON) - PS 5.x SAFE
+# EU/US Latin + Unicode (Symbols/Math/Music/Emoji)
+# Max 5 fonts/run, focus on changing both Inventory & Fallback hashes
+# Log:  %USERPROFILE%\Downloads\FontRotator\log.txt
+# ================================
 
 # --- Admin guard ---
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
-    ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-  Write-Host "[ERROR] Hãy chạy PowerShell 'Run as Administrator'." -ForegroundColor Red
+  ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+  Write-Host "[ERROR] Run PowerShell as Administrator." -ForegroundColor Red
   return
 }
 
-# --- TLS + Vars ---
+# --- TLS & paths ---
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 $UserDownloads = [Environment]::GetFolderPath('UserProfile') + "\Downloads"
-$BaseDir       = Join-Path $UserDownloads "FontRotator"
-$LogPath       = Join-Path $BaseDir "log.txt"
-$TempDir       = Join-Path $env:TEMP "FontRotator"
-$FontsDir      = "$env:WINDIR\Fonts"
-$HKLM_FONTS    = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-$HKLM_LINK     = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
-$HKCU_LINK     = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
-$HKLM_SUBST    = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
-$HKCU_SUBST    = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
-$MaxFontsPerRun = 5
+$BaseDir = Join-Path $UserDownloads "FontRotator"
+$LogPath = Join-Path $BaseDir "log.txt"
+$TempDir = Join-Path $env:TEMP "FontRotator"
+$FontsDir = "$env:WINDIR\Fonts"
 
-# --- FS prep ---
+$HKLM_FONTS = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+$HKLM_LINK  = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
+$HKCU_LINK  = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
+$HKLM_SUBST = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
+$HKCU_SUBST = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
+
 New-Item -ItemType Directory -Path $BaseDir -Force | Out-Null
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
@@ -48,17 +47,11 @@ function Get-FontRegistryList {
       Sort-Object -Unique
   } catch { @() }
 }
-
 function Hash-String([string]$s){
   $sha = [System.Security.Cryptography.SHA256]::Create()
   ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s)) | ForEach-Object { $_.ToString("x2") }) -join "" | ForEach-Object { $_.ToUpper() }
 }
-
-function Get-InventoryHash {
-  $list = Get-FontRegistryList
-  return Hash-String ($list -join "|")
-}
-
+function Get-InventoryHash { Hash-String ((Get-FontRegistryList) -join "|") }
 function Get-FallbackHash {
   $parts = @()
   foreach($root in @($HKLM_LINK,$HKCU_LINK)){
@@ -75,39 +68,31 @@ function Get-FallbackHash {
         $parts += ("{0}->{1}" -f $_.Name, $_.Value) }
     }catch{}
   }
-  return Hash-String (($parts | Sort-Object) -join "|")
+  Hash-String (($parts | Sort-Object) -join "|")
 }
-
-function Test-UrlOk([string]$url){
-  try{
-    $resp = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
-    return ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400)
-  }catch{ return $false }
-}
+function Ensure-Key($path){ if(-not (Test-Path $path)){ New-Item -Path $path -Force | Out-Null } }
 
 function Download-SmallTTF {
   param([string[]]$Urls,[string]$OutFile,[int]$MaxTries=3)
   foreach($u in $Urls){
     for($i=1;$i -le $MaxTries;$i++){
-      Log "INFO" "Download attempt $i: $u"
+      Log "INFO" ("Download attempt {0}: {1}" -f $i,$u)
       try{
-        # HEAD chặn 404 sớm
-        if(-not (Test-UrlOk $u)){ throw "HEAD not OK" }
+        try{ $null = Invoke-WebRequest -Uri $u -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop }catch{}
         Invoke-WebRequest -Uri $u -OutFile $OutFile -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
         $fi = Get-Item -LiteralPath $OutFile -ErrorAction Stop
-        if($fi.Length -lt 10240){ throw "File too small: $($fi.Length) bytes" }
+        if($fi.Length -lt 10240){ throw "File too small ($($fi.Length) bytes)" }
         Log "INFO" "Download OK: $OutFile"
         return $true
       }catch{
         Log "ERROR" "Download error: $($_.Exception.Message)"
-        Start-Sleep -Milliseconds (400 + (Get-Random -Minimum 0 -Maximum 400))
+        Start-Sleep -Milliseconds (350 + (Get-Random -Minimum 0 -Maximum 300))
       }
     }
   }
   Log "ERROR" "Download failed for all URLs."
   return $false
 }
-
 function Install-Ttf {
   param([string]$FilePath,[string]$DisplayName)
   try{
@@ -122,81 +107,119 @@ function Install-Ttf {
     }
     $keyName = "$DisplayName (TrueType)"
     try {
-      New-ItemProperty -Path $HKLM_FONTS -Name $keyName -Value $destName -PropertyType String -Force | Out-Null
-    } catch {
-      Set-ItemProperty -Path $HKLM_FONTS -Name $keyName -Value $destName -ErrorAction SilentlyContinue
-    }
+      if(-not (Get-ItemProperty -Path $HKLM_FONTS -Name $keyName -ErrorAction SilentlyContinue)){
+        New-ItemProperty -Path $HKLM_FONTS -Name $keyName -Value $destName -PropertyType String -Force | Out-Null
+      } else {
+        Set-ItemProperty -Path $HKLM_FONTS -Name $keyName -Value $destName -ErrorAction SilentlyContinue
+      }
+    } catch { }
     return $true
   }catch{
     Log "ERROR" "Install error: $($_.Exception.Message)"
     return $false
   }
 }
-
-function Ensure-Key($path){
-  if(-not (Test-Path $path)){ New-Item -Path $path -Force | Out-Null }
+function Update-SystemLink {
+  param([string]$Root,[string]$Family,[string[]]$PrependEntries)
+  try{
+    Ensure-Key $Root
+    $cur = $null
+    try { $cur = (Get-ItemProperty -Path $Root -Name $Family -ErrorAction Stop).$Family } catch { $cur = @() }
+    if($cur -is [string]){ $cur = @($cur) }
+    $newOrder = @()
+    # Trộn ngẫu nhiên để đổi thứ tự fallback mỗi lần
+    $rand = $PrependEntries | Sort-Object { Get-Random }
+    $newOrder += $rand
+    $newOrder += $cur
+    # bỏ trùng
+    $seen = @{}
+    $final = @()
+    foreach($e in $newOrder){
+      if(-not $seen.ContainsKey($e)){ $seen[$e]=$true; $final += $e }
+    }
+    if(-not (Get-ItemProperty -Path $Root -Name $Family -ErrorAction SilentlyContinue)){
+      New-ItemProperty -Path $Root -Name $Family -Value $final -PropertyType MultiString -Force | Out-Null
+    } else {
+      Set-ItemProperty -Path $Root -Name $Family -Value $final -ErrorAction SilentlyContinue
+    }
+    $scope = if($Root -like "HKLM:*"){"HKLM"}else{"HKCU"}
+    Log "INFO" ("SystemLink [{0}] ({1}) <= {2}" -f $Family,$scope,($PrependEntries -join " | "))
+  }catch{
+    Log "ERROR" ("SystemLink update failed [{0}]: {1}" -f $Family, $_.Exception.Message)
+  }
 }
 
-# --- Curated pools (EU/US metrics: nhỏ, đã test OK; Unicode: coverage) ---
+# --- Curated pools (TTF, small, live links) ---
 $Pool_Latin = @(
-  @{ Name="Titillium Web";     File="TitilliumWeb-Regular.ttf"; Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/titilliumweb/TitilliumWeb-Regular.ttf") },
-  @{ Name="Spectral";          File="Spectral-Regular.ttf";     Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-Regular.ttf") },
-  @{ Name="Barlow";            File="Barlow-Regular.ttf";       Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/barlow/Barlow-Regular.ttf") },
-  @{ Name="Barlow Condensed";  File="BarlowCondensed-Regular.ttf"; Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/barlowcondensed/BarlowCondensed-Regular.ttf") },
-  @{ Name="Alegreya Sans";     File="AlegreyaSans-Regular.ttf"; Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/alegreyasans/AlegreyaSans-Regular.ttf") },
-  @{ Name="Zilla Slab";        File="ZillaSlab-Regular.ttf";    Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/zillaslab/ZillaSlab-Regular.ttf") },
-  @{ Name="Ubuntu";            File="Ubuntu-Regular.ttf";       Urls=@("https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Regular.ttf") },
-  @{ Name="Ubuntu Mono";       File="UbuntuMono-Regular.ttf";   Urls=@("https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntumono/UbuntuMono-Regular.ttf") },
-  @{ Name="Cousine";           File="Cousine-Regular.ttf";      Urls=@("https://raw.githubusercontent.com/google/fonts/main/apache/cousine/Cousine-Regular.ttf") },
-  @{ Name="Tinos";             File="Tinos-Regular.ttf";        Urls=@("https://raw.githubusercontent.com/google/fonts/main/apache/tinos/Tinos-Regular.ttf") },
-  @{ Name="IBM Plex Mono";     File="IBMPlexMono-Regular.ttf";  Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-Regular.ttf") },
-  @{ Name="Gentium Plus";      File="GentiumPlus-Regular.ttf";  Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumplus/GentiumPlus-Regular.ttf") },
-  @{ Name="Gentium Book Plus"; File="GentiumBookPlus-Regular.ttf"; Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumbookplus/GentiumBookPlus-Regular.ttf") },
-  @{ Name="Crimson Text";      File="CrimsonText-Regular.ttf";  Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Regular.ttf") },
-  @{ Name="Bebas Neue";        File="BebasNeue-Regular.ttf";    Urls=@("https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf") }
+  @{ Name="Titillium Web";     File="TitilliumWeb-Regular.ttf";       Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/titilliumweb/TitilliumWeb-Regular.ttf') };
+  @{ Name="Spectral";          File="Spectral-Regular.ttf";           Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-Regular.ttf') };
+  @{ Name="Barlow";            File="Barlow-Regular.ttf";             Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/barlow/Barlow-Regular.ttf') };
+  @{ Name="Barlow Condensed";  File="BarlowCondensed-Regular.ttf";    Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/barlowcondensed/BarlowCondensed-Regular.ttf') };
+  @{ Name="Alegreya Sans";     File="AlegreyaSans-Regular.ttf";       Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/alegreyasans/AlegreyaSans-Regular.ttf') };
+  @{ Name="Zilla Slab";        File="ZillaSlab-Regular.ttf";          Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/zillaslab/ZillaSlab-Regular.ttf') };
+  @{ Name="Ubuntu";            File="Ubuntu-Regular.ttf";             Urls=@('https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Regular.ttf') };
+  @{ Name="Ubuntu Mono";       File="UbuntuMono-Regular.ttf";         Urls=@('https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntumono/UbuntuMono-Regular.ttf') };
+  @{ Name="Cousine";           File="Cousine-Regular.ttf";            Urls=@('https://raw.githubusercontent.com/google/fonts/main/apache/cousine/Cousine-Regular.ttf') };
+  @{ Name="Tinos";             File="Tinos-Regular.ttf";              Urls=@('https://raw.githubusercontent.com/google/fonts/main/apache/tinos/Tinos-Regular.ttf') };
+  @{ Name="IBM Plex Mono";     File="IBMPlexMono-Regular.ttf";        Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-Regular.ttf') };
+  @{ Name="Gentium Plus";      File="GentiumPlus-Regular.ttf";        Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumplus/GentiumPlus-Regular.ttf') };
+  @{ Name="Gentium Book Plus"; File="GentiumBookPlus-Regular.ttf";    Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumbookplus/GentiumBookPlus-Regular.ttf') };
+  @{ Name="Crimson Text";      File="CrimsonText-Regular.ttf";        Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Regular.ttf') };
+  @{ Name="Bebas Neue";        File="BebasNeue-Regular.ttf";          Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf') };
+  @{ Name="Libre Baskerville"; File="LibreBaskerville-Regular.ttf";   Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf') };
+  # Một số family có 'static' làm fallback:
+  @{ Name="Roboto";            File="Roboto-Regular.ttf";             Urls=@('https://raw.githubusercontent.com/google/fonts/main/apache/roboto/static/Roboto-Regular.ttf','https://raw.githubusercontent.com/google/fonts/main/apache/roboto/Roboto-Regular.ttf') };
+  @{ Name="Inter";             File="Inter-Regular.ttf";              Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/inter/static/Inter-Regular.ttf') };
+  @{ Name="JetBrains Mono";    File="JetBrainsMono-Regular.ttf";      Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/static/JetBrainsMono-Regular.ttf') };
+  @{ Name="Inconsolata";       File="Inconsolata-Regular.ttf";        Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/inconsolata/static/Inconsolata-Regular.ttf') };
+  @{ Name="Josefin Sans";      File="JosefinSans-Regular.ttf";        Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/josefinsans/static/JosefinSans-Regular.ttf') };
+  @{ Name="Raleway";           File="Raleway-Regular.ttf";            Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/static/Raleway-Regular.ttf') };
+  @{ Name="Work Sans";         File="WorkSans-Regular.ttf";           Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/worksans/static/WorkSans-Regular.ttf') };
+  @{ Name="Public Sans";       File="PublicSans-Regular.ttf";         Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/publicsans/static/PublicSans-Regular.ttf') };
+  @{ Name="Space Grotesk";     File="SpaceGrotesk-Regular.ttf";       Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/spacegrotesk/static/SpaceGrotesk-Regular.ttf') };
+  @{ Name="PT Serif";          File="PTSerif-Regular.ttf";            Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/static/PTSerif-Regular.ttf','https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Regular.ttf') };
+  @{ Name="PT Mono";           File="PTMono-Regular.ttf";             Urls=@('https://raw.githubusercontent.com/google/fonts/main/ofl/ptmono/static/PTMono-Regular.ttf','https://raw.githubusercontent.com/google/fonts/main/ofl/ptmono/PTMono-Regular.ttf') }
 )
 
 $Pool_Unicode = @(
   @{ Name="Noto Sans Symbols2"; File="NotoSansSymbols2-Regular.ttf"; Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf",
-      "https://notofonts.github.io/symbols/fonts/NotoSansSymbols2/hinted/ttf/NotoSansSymbols2-Regular.ttf"
-    )},
-  @{ Name="Noto Sans Symbols"; File="NotoSansSymbols-Regular.ttf"; Urls=@(
-      "https://notofonts.github.io/symbols/fonts/NotoSansSymbols/hinted/ttf/NotoSansSymbols-Regular.ttf"
-    )},
-  @{ Name="Noto Sans Math";    File="NotoSansMath-Regular.ttf"; Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf"
-    )},
-  @{ Name="Noto Music";        File="NotoMusic-Regular.ttf";    Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf"
-    )},
-  # Emoji nặng (~10–12MB) — để tắt mặc định cho tốc độ; bật random thấp
-  @{ Name="Noto Color Emoji";  File="NotoColorEmoji.ttf";       Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf"
-    ), Heavy=$true }
+      'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf',
+      'https://notofonts.github.io/symbols/fonts/NotoSansSymbols2/hinted/ttf/NotoSansSymbols2-Regular.ttf'
+    ) };
+  @{ Name="Noto Sans Symbols";  File="NotoSansSymbols-Regular.ttf";  Urls=@(
+      'https://notofonts.github.io/symbols/fonts/NotoSansSymbols/hinted/ttf/NotoSansSymbols-Regular.ttf'
+    ) };
+  @{ Name="Noto Sans Math";     File="NotoSansMath-Regular.ttf";     Urls=@(
+      'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf'
+    ) };
+  @{ Name="Noto Music";         File="NotoMusic-Regular.ttf";        Urls=@(
+      'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf'
+    ) };
+  @{ Name="Noto Color Emoji";   File="NotoColorEmoji.ttf";           Urls=@(
+      'https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf'
+    ); Heavy=$true }
 )
 
-# --- Pre-run hashes ---
+# --- Before hashes ---
 $invBefore = Get-InventoryHash
 $fallbackBefore = Get-FallbackHash
 $cntBefore = (Get-FontRegistryList).Count
-Log "INFO" "Current fonts: $cntBefore"
-Log "INFO" "Inventory Hash: $($invBefore.Substring(0,32))..."
-Log "INFO" "Fallback Hash : $($fallbackBefore.Substring(0,32))..."
+function Short([string]$h){ if($h.Length -gt 32){ $h.Substring(0,32) } else { $h } }
+Log "INFO" ("Current fonts: {0}" -f $cntBefore)
+Log "INFO" ("Inventory Hash: {0}..." -f (Short $invBefore))
+Log "INFO" ("Fallback Hash : {0}..." -f (Short $fallbackBefore))
 
-# --- Pick up to 5 fonts (2 Latin + 3 Unicode with bias to small files) ---
-$latinPick   = ($Pool_Latin | Get-Random -Count 2)
-# Unicode: luôn lấy 3; Emoji (heavy) chỉ 1/5 xác suất nếu chưa có emoji trong hệ thống link
-$ucPoolSmall = $Pool_Unicode | Where-Object { -not $_.ContainsKey('Heavy') }
-$uniPick     = $ucPoolSmall | Get-Random -Count 3
-$includeEmoji = (Get-Random -Minimum 0 -Maximum 5) -eq 0
-if($includeEmoji -and ($latinPick.Count + $uniPick.Count) -lt $MaxFontsPerRun){
-  $uniPick += ($Pool_Unicode | Where-Object { $_.ContainsKey('Heavy') } | Get-Random -Count 1)
-}
+# --- Pick up to 5 fonts: 2 Latin + 3 Unicode (emoji included) ---
+$MaxFontsPerRun = 5
+$latinPick = $Pool_Latin | Get-Random -Count 2
+# Emoji bắt buộc + 2 Unicode nhẹ
+$emojiItem = $Pool_Unicode | Where-Object { $_.Name -eq 'Noto Color Emoji' } | Select-Object -First 1
+$ucSmall   = $Pool_Unicode | Where-Object { $_.Name -ne 'Noto Color Emoji' }
+$uniPick   = @($emojiItem) + ($ucSmall | Get-Random -Count 2)
+
 $selection = @()
 $selection += $latinPick
 $selection += $uniPick
-# Giới hạn cứng
 if($selection.Count -gt $MaxFontsPerRun){
   $selection = $selection | Select-Object -First $MaxFontsPerRun
 }
@@ -214,86 +237,78 @@ foreach($item in $selection){
   }
 }
 
-# --- FontLink / Substitutes to maximize glyph fallback impact ---
+# --- FontLink / Substitutes (prepend new fonts to change fallback paths) ---
 Ensure-Key $HKLM_LINK; Ensure-Key $HKCU_LINK
 Ensure-Key $HKLM_SUBST; Ensure-Key $HKCU_SUBST
 
-# Xây list các entry cần chèn vào FontLink (prepend: ưu tiên font mới)
-# Tên hiển thị cần khớp family phổ biến của Windows
+# Build entries "filename,friendly"
+$latinEntries = @()
+foreach($l in $latinPick){ $latinEntries += ("{0},{1}" -f $l.File,$l.Name) }
+$uniEntries = @()
+foreach($u in $uniPick){ $uniEntries += ("{0},{1}" -f $u.File,$u.Name) }
+
+# SystemLink targets
 $targets = @(
-  @{ Fam="Segoe UI";           Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  @{ Fam="Segoe UI Variable";  Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  @{ Fam="Arial";              Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  @{ Fam="Times New Roman";    Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  @{ Fam="Calibri";            Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  @{ Fam="Consolas";           Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  @{ Fam="Courier New";        Picks=($latinPick | ForEach-Object { "$($_.File),$($_.Name)" }) },
-  # Unicode focal: Symbols, Math, Emoji -> đẩy lên đầu danh sách
-  @{ Fam="Segoe UI Symbol";    Picks=($uniPick   | ForEach-Object { "$($_.File),$($_.Name)" }) }
+  @{ Fam="Segoe UI";            Picks=$latinEntries },
+  @{ Fam="Segoe UI Variable";   Picks=$latinEntries },
+  @{ Fam="Arial";               Picks=$latinEntries },
+  @{ Fam="Times New Roman";     Picks=$latinEntries },
+  @{ Fam="Calibri";             Picks=$latinEntries },
+  @{ Fam="Consolas";            Picks=$latinEntries },
+  @{ Fam="Courier New";         Picks=$latinEntries },
+  @{ Fam="Segoe UI Symbol";     Picks=$uniEntries },
+  @{ Fam="Segoe UI Emoji";      Picks=@("NotoColorEmoji.ttf,Noto Color Emoji") }
 )
 
 foreach($t in $targets){
-  foreach($root in @($HKLM_LINK,$HKCU_LINK)){
-    try{
-      $cur = (Get-ItemProperty -Path $root -Name $t.Fam -ErrorAction SilentlyContinue).$($t.Fam)
-      if($null -eq $cur){ $cur = @() }
-      # Prepend ngẫu nhiên (đổi thứ tự mỗi lần => đổi Fallback)
-      $newOrder = @()
-      $newOrder += ($t.Picks | Sort-Object { Get-Random })
-      $newOrder += $cur
-      # loại trùng (giữ thứ tự lần xuất hiện đầu)
-      $seen = @{}
-      $final = @()
-      foreach($e in $newOrder){
-        if(-not $seen.ContainsKey($e)){ $seen[$e]=$true; $final += $e }
-      }
-      Set-ItemProperty -Path $root -Name $t.Fam -Value $final -Force
-      Log "INFO" ("SystemLink [{0}] ({1}) <= {2}" -f $t.Fam, ($root -like "HKLM:*" ? "HKLM" : "HKCU"), ($t.Picks -join " | "))
-    }catch{
-      Log "ERROR" ("SystemLink update failed [{0}]: {1}" -f $t.Fam, $_.Exception.Message)
-    }
-  }
+  Update-SystemLink -Root $HKLM_LINK -Family $t.Fam -PrependEntries $t.Picks
+  Update-SystemLink -Root $HKCU_LINK -Family $t.Fam -PrependEntries $t.Picks
 }
 
-# Substitutes: thay nhanh 1-1 để đảm bảo tác động rõ rệt
+# Substitutes (1-1)
+function FirstOr($arr,$fallback){ if($arr -and $arr.Count -gt 0){ $arr[0] } else { $fallback } }
+$latinName1 = FirstOr (($latinPick | Select-Object -ExpandProperty Name), "Barlow")
+$latinMono  = FirstOr (($latinPick | Where-Object { $_.Name -match 'Mono|Cousine|Ubuntu Mono|IBM Plex Mono' } | Select-Object -ExpandProperty Name), "IBM Plex Mono")
+$latinSerif = FirstOr (($latinPick | Where-Object { $_.Name -match 'Serif|Gentium|Crimson|Zilla|Spectral|Tinos|Baskerville' } | Select-Object -ExpandProperty Name), "Tinos")
+$unicodeOne = FirstOr (($uniPick   | Where-Object { $_.Name -match 'Symbols|Math|Music' } | Select-Object -ExpandProperty Name), "Noto Sans Symbols2")
+
 $substPairs = @(
-  @{ Src="Segoe UI";            Dst=($latinPick | Select-Object -First 1).Name },
-  @{ Src="Arial";               Dst=($latinPick | Select-Object -First 1).Name },
-  @{ Src="Microsoft Sans Serif";Dst=($latinPick | Select-Object -First 1).Name },
-  @{ Src="Times New Roman";     Dst=($latinPick | Where-Object { $_.Name -match "Serif|Merri|Gentium|Tinos|Crimson|Zilla|Spectral" } | Select-Object -First 1 -ExpandProperty Name) },
-  @{ Src="Consolas";            Dst=($latinPick | Where-Object { $_.Name -match "Mono|Plex|Ubuntu Mono|Cousine" } | Select-Object -First 1 -ExpandProperty Name) },
-  @{ Src="Courier New";         Dst=($latinPick | Where-Object { $_.Name -match "Mono|Plex|Ubuntu Mono|Cousine" } | Select-Object -First 1 -ExpandProperty Name) },
-  @{ Src="Segoe UI Symbol";     Dst=($uniPick   | Where-Object { $_.Name -match "Symbols|Math|Music|Emoji" } | Select-Object -First 1 -ExpandProperty Name) },
-  @{ Src="Cambria Math";        Dst=($uniPick   | Where-Object { $_.Name -match "Math|Symbols" } | Select-Object -First 1 -ExpandProperty Name) },
-  @{ Src="Segoe UI Emoji";      Dst=(($uniPick   | Where-Object { $_.Name -match "Emoji" } | Select-Object -First 1).Name) }
-) | Where-Object { $_.Dst -and $_.Dst.Trim() -ne "" }
+  @{ Src="Segoe UI";            Dst=$latinName1 },
+  @{ Src="Arial";               Dst=$latinName1 },
+  @{ Src="Microsoft Sans Serif";Dst=$latinName1 },
+  @{ Src="Times New Roman";     Dst=$latinSerif },
+  @{ Src="Consolas";            Dst=$latinMono },
+  @{ Src="Courier New";         Dst=$latinMono },
+  @{ Src="Segoe UI Symbol";     Dst=$unicodeOne },
+  @{ Src="Cambria Math";        Dst="Noto Sans Math" },
+  @{ Src="Segoe UI Emoji";      Dst="Noto Color Emoji" }
+)
 
 foreach($p in $substPairs){
   foreach($root in @($HKLM_SUBST,$HKCU_SUBST)){
     try{
+      Ensure-Key $root
       Set-ItemProperty -Path $root -Name $p.Src -Value $p.Dst -Force
-      Log "INFO" ("Substitute({0}): {1} -> {2}" -f ($root -like "HKLM:*" ? "HKLM" : "HKCU"), $p.Src, $p.Dst)
+      $scope = if($root -like "HKLM:*"){"HKLM"}else{"HKCU"}
+      Log "INFO" ("Substitute({0}): {1} -> {2}" -f $scope,$p.Src,$p.Dst)
     }catch{
       Log "ERROR" ("Substitute failed {0}: {1}" -f $p.Src, $_.Exception.Message)
     }
   }
 }
 
-# --- Post-run hashes ---
+# --- After hashes ---
 $invAfter = Get-InventoryHash
 $fallbackAfter = Get-FallbackHash
 $cntAfter = (Get-FontRegistryList).Count
 
 Log "INFO" ""
 Log "INFO" "--- FONT METRICS (Registry list) ---"
-Log "INFO" ("Count: {0} -> {1}  (? {2})" -f $cntBefore,$cntAfter,($cntAfter-$cntBefore))
+Log "INFO" ("Count: {0} -> {1}  (Δ {2})" -f $cntBefore,$cntAfter,($cntAfter-$cntBefore))
 Log "INFO" ""
 Log "INFO" "--- HASHES ---"
-Log "INFO" ("Inventory:  {0} -> {1}" -f $invBefore.Substring(0,32), $invAfter.Substring(0,32))
-Log "INFO" ("Fallback :  {0} -> {1}" -f $fallbackBefore.Substring(0,32), $fallbackAfter.Substring(0,32))
+Log "INFO" ("Inventory:  {0} -> {1}" -f (Short $invBefore), (Short $invAfter))
+Log "INFO" ("Fallback :  {0} -> {1}" -f (Short $fallbackBefore), (Short $fallbackAfter))
 Log "INFO" ("Font Metrics changed?   {0}" -f ($(if($invBefore -ne $invAfter){"YES"}else{"NO"})))
 Log "INFO" ("Unicode Glyphs changed? {0}" -f ($(if($fallbackBefore -ne $fallbackAfter){"YES"}else{"NO"})))
 Log "INFO" "Run finished."
-
-# --- Cleanup nhẹ (giữ log & temp cho lần sau) ---
-# Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
