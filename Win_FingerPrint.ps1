@@ -1,12 +1,16 @@
 <# ===================================================================
-   ADVANCED FONT FINGERPRINT ROTATOR v3.1 (PowerShell 5.x SAFE)
+   ADVANCED FONT FINGERPRINT ROTATOR v3.2 (PowerShell 5.x SAFE)
    - Random cài thêm font (Google/Adobe/Microsoft/JetBrains…)
    - Ghi Registry theo Face Name (TTF/OTF; TTC fallback)
-   - Đổi FontLink/SystemLink theo profile (JP/SC/KR) => đổi Unicode glyphs
-   - 3 hashes để kiểm: InventoryHash, FallbackChainHash + (đếm FaceNames)
-   - Không xoá font hệ thống; chỉ thêm font mới.
+   - Đổi FontLink/SystemLink cho:
+       Segoe UI / Segoe UI Symbol / Segoe UI Emoji
+       + Arial / Times New Roman / Courier New / Calibri / Cambria / Consolas
+     => thay Unicode glyphs cho default, sans-serif, serif, monospace (v.v.)
+   - Hash kiểm tra: InventoryHash (Name|File|Size) & FallbackChainHash
+   - KHÔNG mở trình duyệt tự động. KHÔNG xoá font hệ thống.
 =================================================================== #>
 
+# ===== Admin check =====
 if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
     Write-Host "ERROR: Please run PowerShell as Administrator!" -ForegroundColor Red
@@ -14,6 +18,7 @@ if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     exit 1
 }
 
+# ===== Globals =====
 $TempDir  = "$env:TEMP\FontRotator"
 $FontsDir = "$env:SystemRoot\Fonts"
 if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
@@ -21,12 +26,12 @@ if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force 
 function Write-Status { param([string]$m,[string]$c="Cyan"); $ts=Get-Date -Format "HH:mm:ss"; Write-Host "[$ts] $m" -ForegroundColor $c }
 function Head32 { param($s); if ($s -and $s.Length -ge 32) { return $s.Substring(0,32) } elseif ($s) { return $s } else { return "NA" } }
 
+# ===== Trusted sources =====
 $FontDB = @{
   Western = @{
     "Inter"         = "https://github.com/rsms/inter/releases/download/v3.19/Inter-3.19.zip"
     "JetBrainsMono" = "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip"
     "Roboto"        = "https://github.com/googlefonts/roboto/releases/download/v2.138/roboto-unhinted.zip"
-    "IBM-Plex-Sans" = "https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-sans%401.0.0/TrueType.zip"
     "Ubuntu"        = "https://github.com/googlefonts/ubuntu/releases/download/v0.83/ubuntu-font-family-0.83.zip"
     "OpenSans"      = "https://github.com/googlefonts/opensans/releases/download/v3.000/opensans.zip"
     "PT-Sans"       = "https://github.com/googlefonts/pt-sans/releases/download/v1.005/PT_Sans.zip"
@@ -58,10 +63,10 @@ $FontDB = @{
     "VictorMono"    = "https://github.com/rubjo/victor-mono/releases/download/v1.5.4/VictorMonoAll.zip"
     "Inconsolata"   = "https://github.com/googlefonts/Inconsolata/releases/download/v3.000/fonts_ttf.zip"
     "DejaVu"        = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
-    "Liberation"    = "https://github.com/liberationfonts/liberation-fonts/releases/download/2.1.5/liberation-fonts-ttf-2.1.5.tar.gz"
   }
 }
 
+# ===== Helpers =====
 function Download-File {
   param([string]$Url,[string]$OutFile,[int]$MaxRetry=3,[int]$TimeoutSec=300)
   for ($i=1; $i -le $MaxRetry; $i++) {
@@ -69,11 +74,8 @@ function Download-File {
       if ($PSVersionTable.PSVersion.Major -ge 7) {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -TimeoutSec $TimeoutSec
       } else {
-        try {
-          Start-BitsTransfer -Source $Url -Destination $OutFile -DisplayName "FontDL" -Description "Downloading $([IO.Path]::GetFileName($OutFile))" -ErrorAction Stop
-        } catch {
-          Invoke-WebRequest -Uri $Url -OutFile $OutFile
-        }
+        try { Start-BitsTransfer -Source $Url -Destination $OutFile -DisplayName "FontDL" -Description "Downloading $([IO.Path]::GetFileName($OutFile))" -ErrorAction Stop }
+        catch { Invoke-WebRequest -Uri $Url -OutFile $OutFile }
       }
       if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { return $true }
     } catch {}
@@ -115,7 +117,7 @@ function Get-FontInventoryHash {
 
 function Get-FallbackChainHash {
   $key='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink'
-  $bases=@("Segoe UI","Segoe UI Symbol","Segoe UI Emoji")
+  $bases=@("Segoe UI","Segoe UI Symbol","Segoe UI Emoji","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas")
   $rows=@()
   foreach($b in $bases){
     $v=(Get-ItemProperty -Path $key -Name $b -ErrorAction SilentlyContinue).$b
@@ -187,16 +189,6 @@ function Install-FromUrl { param([string]$Name,[string]$Url)
       foreach($f in $picked){ $x=Install-SingleFontFile -FilePath $f.FullName -FallbackName $Name; if ($x -ne $null){ $installed+=$x } }
       return $installed
     }
-    if ($lower.EndsWith(".tar.gz")) {
-      $tgz=Join-Path $TempDir "$Name.tgz"
-      if (-not (Download-File -Url $Url -OutFile $tgz)) { Write-Status "Download failed: $Name" "Red"; return @() }
-      try { tar -xzf $tgz -C $TempDir | Out-Null } catch {}
-      $installed=@()
-      $ttfs = Get-ChildItem -Path $TempDir -Recurse -Include *.ttf,*.otf |
-        Where-Object { $_.Name -match "Regular|Bold|Medium" } | Select-Object -First 4
-      foreach($f in $ttfs){ $x=Install-SingleFontFile -FilePath $f.FullName -FallbackName $Name; if ($x -ne $null){ $installed+=$x } }
-      return $installed
-    }
     Write-Status "Unsupported URL type: $Url" "Yellow"
     return @()
   } catch {
@@ -244,7 +236,7 @@ function Pick-RandomFonts {
   $picked += ,@{ Name=$w.Name; Url=$w.Value }
   $u = ($FontDB.Unicode.GetEnumerator() | Get-Random -Count 1)
   $picked += ,@{ Name=$u.Name; Url=$u.Value }
-  $cjkKeys = @("NotoSansCJKjp-Regular","NotoSansCJKsc-Regular","NotoSansCJKkr-Regular","NotoSansCJK-OTC")
+  $cjkKeys = @("NotoSansCJKjp-Regular","NotoSansCJKsc-Regular","NotoSansCJKkr-Regular")
   $c = ($cjkKeys | Get-Random -Count 1)[0]
   $picked += ,@{ Name=$c; Url=$FontDB.CJK[$c] }
   $pool=@()
@@ -272,11 +264,14 @@ function Find-PairByFacePriority {
   return $null
 }
 
+# ======================= MAIN =======================
+
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
-Write-Host "   ADVANCED FONT FINGERPRINT ROTATOR v3.1 (PS 5.x SAFE)" -ForegroundColor Yellow
+Write-Host "   ADVANCED FONT FINGERPRINT ROTATOR v3.2 (PS 5.x SAFE)" -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Green
 
+# Baseline
 $beforeList   = Get-CurrentFonts
 $beforeInv    = Get-FontInventoryHash
 $beforeFall   = Get-FallbackChainHash
@@ -285,20 +280,20 @@ Write-Status ("Current fonts: {0}" -f $beforeList.Count) "Cyan"
 Write-Status ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
 Write-Status ("FallbackChain:  {0}..." -f (Head32 $beforeFall)) "Cyan"
 
+# 1) Random install 5..8 fonts
 $targetCount = Get-Random -Minimum 5 -Maximum 9
 Write-Host "`n[1/3] Download & install random fonts ($targetCount)..." -ForegroundColor Yellow
 $wish = Pick-RandomFonts -Count $targetCount
-$installedMeta=@()
-foreach($item in $wish){ $r = Install-FromUrl -Name $item.Name -Url $item.Url; if ($r.Count -gt 0) { $installedMeta += $r } }
+foreach($item in $wish){ $null = Install-FromUrl -Name $item.Name -Url $item.Url }
 
-foreach($core in @("NotoSymbols","NotoSansMath","NotoColorEmoji")){
-  $url=$FontDB.Unicode[$core]
-  if ($url) { $null = Install-FromUrl -Name $core -Url $url }
-}
+# ensure core packs (best-effort)
+foreach($core in @("NotoSymbols","NotoSansMath","NotoColorEmoji")){ if ($FontDB.Unicode[$core]) { $null = Install-FromUrl -Name $core -Url $FontDB.Unicode[$core] } }
 
+# 2) Configure Unicode glyph fallback (SystemLink) rộng hơn
 Write-Host "`n[2/3] Configure Unicode glyph fallback (SystemLink)..." -ForegroundColor Yellow
-$bk1="$TempDir\SystemLink_backup.reg"
-$bk2="$TempDir\FontSub_backup.reg"
+
+# backup once
+$bk1="$TempDir\SystemLink_backup.reg"; $bk2="$TempDir\FontSub_backup.reg"
 if (!(Test-Path $bk1)) { & reg export "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink" $bk1 /y | Out-Null }
 if (!(Test-Path $bk2)) { & reg export "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" $bk2 /y | Out-Null }
 
@@ -330,16 +325,21 @@ $nsym  = Find-PairByFacePriority -FacePriority @("Noto Symbols") -FaceToFileMap 
 $nmath = Find-PairByFacePriority -FacePriority @("Noto Sans Math") -FaceToFileMap $faceMap
 if ($nsym  -ne $null) { $segSymPairs  += $nsym  }
 if ($nmath -ne $null) { $segSymPairs  += $nmath }
-
 $nemoji = Find-PairByFacePriority -FacePriority @("Noto Color Emoji") -FaceToFileMap $faceMap
 if ($nemoji -ne $null) { $segEmojiPairs += $nemoji }
 
-if ($segBasePairs.Count -gt 0) { Prepend-FontLink -BaseFamily "Segoe UI"        -Pairs $segBasePairs }
-if ($segSymPairs.Count  -gt 0) { Prepend-FontLink -BaseFamily "Segoe UI Symbol" -Pairs $segSymPairs }
-if ($segEmojiPairs.Count -gt 0) { Prepend-FontLink -BaseFamily "Segoe UI Emoji"  -Pairs $segEmojiPairs }
+# Prepend cho nhiều base families: default/sans-serif/serif/monospace UI
+$baseFamilies = @("Segoe UI","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas")
+foreach($bf in $baseFamilies){
+  if ($segBasePairs.Count -gt 0){ Prepend-FontLink -BaseFamily $bf -Pairs $segBasePairs }
+}
+if ($segSymPairs.Count  -gt 0){ Prepend-FontLink -BaseFamily "Segoe UI Symbol" -Pairs $segSymPairs }
+if ($segEmojiPairs.Count -gt 0){ Prepend-FontLink -BaseFamily "Segoe UI Emoji"  -Pairs $segEmojiPairs }
 
+# refresh caches & broadcast
 Refresh-Fonts
 
+# 3) Results
 Write-Host "`n[3/3] Results & verification..." -ForegroundColor Yellow
 $afterList  = Get-CurrentFonts
 $afterInv   = Get-FontInventoryHash
@@ -358,8 +358,6 @@ $changedFall = ($beforeFall -ne $afterFall)
 Write-Host ("Font Metrics changed?   {0}" -f ($(if ($changedInv) {"YES"} else {"NO"}))) -ForegroundColor ($(if ($changedInv) {"Green"} else {"Red"}))
 Write-Host ("Unicode Glyphs changed? {0}" -f ($(if ($changedFall) {"YES"} else {"NO"}))) -ForegroundColor ($(if ($changedFall) {"Green"} else {"Red"}))
 
-Start-Process "https://browserleaks.com/fonts"
-Start-Process "https://fingerprintjs.com/demo"
+# No auto-opening browsers (the user will check manually)
 
-Write-Host "`nDone. If browsers are open, restart them to clear font caches." -ForegroundColor Yellow
 try { Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
