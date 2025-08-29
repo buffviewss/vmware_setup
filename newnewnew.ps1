@@ -1,13 +1,13 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.9-FULL
-  Goal: MỖI LẦN CHẠY đều đổi được:
-   - Font Metrics Fingerprint (Inventory hash)  => bằng cách gỡ/cài mới "font của script"
-   - Unicode Glyphs Fingerprint (Fallback hash) => bằng cách random SystemLink/Substitutes + patch Chromium
-  Lưu ý:
-   - KHÔNG xoá font hệ thống. Chỉ gỡ các font do script đã cài (được đánh dấu).
-   - Tải TTF/OTF trực tiếp (có mirror jsDelivr) để giảm 404.
-   - Đóng Chrome/Edge và vá default fonts để Chromium áp dụng ngay.
-   - Log: %USERPROFILE%\Downloads\log.txt
+  ADVANCED FONT FINGERPRINT ROTATOR v3.10-API
+  Mục tiêu: MỖI LẦN CHẠY đổi được:
+    • Font Metrics Fingerprint (Inventory hash)
+    • Unicode Glyphs Fingerprint (Fallback hash)
+  Cách làm:
+    1) Gỡ 1 phần các font do script cài từ trước (không đụng font hệ thống).
+    2) Cài mới N font qua API: Fontsource(jsDelivr/unpkg) → Google CSS2(gstatic TTF) → GitHub Contents.
+    3) Random SystemLink + FontSubstitutes (HKLM/HKCU), vá default fonts Chrome/Edge, kill tiến trình.
+  Log: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
 
 param(
@@ -15,12 +15,12 @@ param(
   [int]$InstallMax   = 18,
   [int]$UninstallMin = 6,
   [int]$UninstallMax = 10,
-  [switch]$KeepGrowth = $false,     # true = không gỡ font cũ (inventory vẫn đổi nhưng file tăng dần)
+  [switch]$KeepGrowth = $false,     # không gỡ font cũ (chỉ cộng dồn)
   [switch]$NoChromiumFonts = $false,
   [switch]$NoForceClose    = $false,
   [string]$ChromeProfile = "Default",
   [string]$EdgeProfile   = "Default",
-  [int]$MaxRounds = 3               # số vòng thử thêm nếu hash chưa đổi
+  [int]$MaxRounds = 3               # số vòng thử nếu hash chưa đổi
 )
 
 # ---- Admin check ----
@@ -30,7 +30,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.9-FULL"
+$Version = "3.10-API"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -54,219 +54,128 @@ $StateKey = "HKLM:\SOFTWARE\FontRotator"
 if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
 if (!(Test-Path $StateKey)) { New-Item -Path $StateKey -Force | Out-Null }
 
-# ---- DB: NHIỀU LINK TTF/OTF (mỗi item có >=1 mirror) ----
-#  Ưu tiên: Math/Symbols/Emoji (gây khác biệt glyph), thêm Mono/Sans/Serif Âu–Mỹ
-$DB = @{
-  SymbolsMath = @(
-    @{Name="Noto Sans Math";Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf"
-    )}
-    @{Name="Noto Sans Symbols 2";Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf"
-    )}
-    @{Name="Noto Music";Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf"
-    )}
-    @{Name="XITS Math";Urls=@(
-      "https://github.com/khaledhosny/xits-fonts/releases/download/v1.301/xits-math-otf-1.301.zip"  # zip fallback—bị skip bởi installer, nhưng để tăng entropy nguồn; ta bổ sung Libertinus để chắc chắn có OTF
-    )}
-    @{Name="Libertinus Math";Urls=@(
-      "https://github.com/alerque/libertinus/releases/download/v7.040/LibertinusMath-Regular.otf"
-    )}
-  )
-  Emoji = @(
-    @{Name="Noto Color Emoji";Urls=@(
-      "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf",
-      "https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji@main/fonts/NotoColorEmoji.ttf"
-    )}
-  )
-  Mono = @(
-    @{Name="JetBrains Mono";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/jetbrainsmono/static/JetBrainsMono-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/jetbrainsmono/static/JetBrainsMono-Regular.ttf"
-    )}
-    @{Name="Source Code Pro";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/sourcecodepro/static/SourceCodePro-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/sourcecodepro/static/SourceCodePro-Regular.ttf"
-    )}
-    @{Name="Inconsolata";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/inconsolata/static/Inconsolata-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inconsolata/static/Inconsolata-Regular.ttf"
-    )}
-    @{Name="Cousine";Urls=@(
-      "https://github.com/google/fonts/raw/main/apache/cousine/Cousine%5Bwght%5D.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/apache/cousine/Cousine%5Bwght%5D.ttf"
-    )}
-    @{Name="Anonymous Pro";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/anonymouspro/AnonymousPro-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/anonymouspro/AnonymousPro-Regular.ttf"
-    )}
-  )
-  Sans = @(
-    @{Name="Inter";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/inter/static/Inter-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inter/static/Inter-Regular.ttf"
-    )}
-    @{Name="Open Sans";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/opensans/static/OpenSans-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/opensans/static/OpenSans-Regular.ttf"
-    )}
-    @{Name="Noto Sans";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/notosans/static/NotoSans-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosans/static/NotoSans-Regular.ttf"
-    )}
-    @{Name="Roboto";Urls=@(
-      "https://github.com/google/fonts/raw/main/apache/roboto/static/Roboto-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/apache/roboto/static/Roboto-Regular.ttf"
-    )}
-    @{Name="Work Sans";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/worksans/static/WorkSans-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/worksans/static/WorkSans-Regular.ttf"
-    )}
-    @{Name="DM Sans";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/dmsans/static/DMSans-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/dmsans/static/DMSans-Regular.ttf"
-    )}
-    @{Name="Poppins";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins%5Bwght%5D.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/poppins/Poppins%5Bwght%5D.ttf"
-    )}
-    @{Name="Karla";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/karla/static/Karla-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/karla/static/Karla-Regular.ttf"
-    )}
-    @{Name="Manrope";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/manrope/static/Manrope-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/manrope/static/Manrope-Regular.ttf"
-    )}
-    @{Name="Urbanist";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/urbanist/static/Urbanist-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/urbanist/static/Urbanist-Regular.ttf"
-    )}
-    @{Name="Nunito Sans";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/nunitosans/static/NunitoSans-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/nunitosans/static/NunitoSans-Regular.ttf"
-    )}
-    @{Name="Mulish";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/mulish/static/Mulish-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/mulish/static/Mulish-Regular.ttf"
-    )}
-    @{Name="Rubik";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/rubik/static/Rubik-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/rubik/static/Rubik-Regular.ttf"
-    )}
-    @{Name="Cabin";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/cabin/static/Cabin-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/cabin/static/Cabin-Regular.ttf"
-    )}
-    @{Name="Asap";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/asap/static/Asap-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/asap/static/Asap-Regular.ttf"
-    )}
-    @{Name="Lexend";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/lexend/static/Lexend-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/lexend/static/Lexend-Regular.ttf"
-    )}
-    @{Name="Heebo";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/heebo/static/Heebo-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/heebo/static/Heebo-Regular.ttf"
-    )}
-    @{Name="Outfit";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/outfit/static/Outfit-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/outfit/static/Outfit-Regular.ttf"
-    )}
-    @{Name="Sora";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/sora/static/Sora-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/sora/static/Sora-Regular.ttf"
-    )}
-    @{Name="Plus Jakarta Sans";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/plusjakartasans/static/PlusJakartaSans-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/plusjakartasans/static/PlusJakartaSans-Regular.ttf"
-    )}
+# ---- Danh sách family (API sẽ tự tìm file .ttf/.otf)
+$FAMILIES = @{
+  Sans  = @(
+    "Inter","Open Sans","Roboto","Noto Sans","Work Sans","Manrope","Poppins",
+    "DM Sans","Karla","Rubik","Cabin","Asap","Lexend","Heebo","Outfit",
+    "Sora","Plus Jakarta Sans","Nunito Sans","Mulish","Urbanist","Montserrat",
+    "Raleway","Lato","Source Sans 3","PT Sans","Fira Sans","IBM Plex Sans"
   )
   Serif = @(
-    @{Name="Merriweather";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/merriweather/Merriweather-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/merriweather/Merriweather-Regular.ttf"
-    )}
-    @{Name="Lora";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/lora/static/Lora-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/lora/static/Lora-Regular.ttf"
-    )}
-    @{Name="Libre Baskerville";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/librebaskerville/LibreBaskerville-Regular.ttf"
-    )}
-    @{Name="Playfair Display";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/static/PlayfairDisplay-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/playfairdisplay/static/PlayfairDisplay-Regular.ttf"
-    )}
-    @{Name="Source Serif 4";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/sourceserif4/static/SourceSerif4-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/sourceserif4/static/SourceSerif4-Regular.ttf"
-    )}
-    @{Name="Cardo";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/cardo/Cardo-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/cardo/Cardo-Regular.ttf"
-    )}
-    @{Name="Crimson Pro";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/crimsonpro/static/CrimsonPro-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/crimsonpro/static/CrimsonPro-Regular.ttf"
-    )}
-    @{Name="Cormorant Garamond";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/cormorantgaramond/static/CormorantGaramond-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/cormorantgaramond/static/CormorantGaramond-Regular.ttf"
-    )}
-    @{Name="Old Standard TT";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/oldstandardtt/OldStandardTT-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/oldstandardtt/OldStandardTT-Regular.ttf"
-    )}
-    @{Name="Domine";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/domine/static/Domine-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/domine/static/Domine-Regular.ttf"
-    )}
-    @{Name="Spectral";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/spectral/static/Spectral-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/spectral/static/Spectral-Regular.ttf"
-    )}
-    @{Name="EB Garamond";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/ebgaramond/EBGaramond-VariableFont_wght.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/ebgaramond/EBGaramond-VariableFont_wght.ttf"
-    )}
-    @{Name="Gentium Book Plus";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/gentiumbookplus/static/GentiumBookPlus-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/gentiumbookplus/static/GentiumBookPlus-Regular.ttf"
-    )}
-    @{Name="Literata";Urls=@(
-      "https://github.com/google/fonts/raw/main/ofl/literata/static/Literata-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/literata/static/Literata-Regular.ttf"
-    )}
-    @{Name="Tinos";Urls=@(
-      "https://github.com/google/fonts/raw/main/apache/tinos/Tinos-Regular.ttf",
-      "https://cdn.jsdelivr.net/gh/google/fonts@main/apache/tinos/Tinos-Regular.ttf"
-    )}
+    "Merriweather","Lora","Libre Baskerville","Playfair Display","Source Serif 4",
+    "Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine",
+    "Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos","Georgia Pro"
+  )
+  Mono  = @(
+    "Source Code Pro","JetBrains Mono","Inconsolata","Cousine","Anonymous Pro",
+    "Iosevka","Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono"
   )
 }
 
-# ---- Helpers ----
+# ---- Unicode boosters (Noto) – trực tiếp, rất ổn định
+$UNICODE_BOOST = @(
+  @{ Name="Noto Color Emoji"; Urls=@(
+     "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf",
+     "https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji@main/fonts/NotoColorEmoji.ttf"
+  )},
+  @{ Name="Noto Sans Symbols 2"; Urls=@(
+     "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf",
+     "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf"
+  )},
+  @{ Name="Noto Sans Math"; Urls=@(
+     "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf",
+     "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf"
+  )},
+  @{ Name="Noto Music"; Urls=@(
+     "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf",
+     "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf"
+  )}
+)
+
+# ===================== API RESOLVERS =====================
+function To-PackageName { param([string]$family)
+  ($family.ToLower() -replace '[\s_]+','-')
+}
+
+# 1) Fontsource + jsDelivr API
+function Get-FontFromFontsource {
+  param([string]$Family)
+  $pkg = To-PackageName $Family
+  $metaUrl = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg"
+  try {
+    $meta = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.10' } $metaUrl | ConvertFrom-Json
+    $ver  = $meta.versions[0]
+    $files = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.10' } "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg@${ver}") | ConvertFrom-Json
+    $all = $files.files | Where-Object { $_ -match '\.ttf$' }
+    $pick = $all | Where-Object { $_ -match 'latin.*400.*normal\.ttf$' } | Select-Object -First 1
+    if(-not $pick){ $pick = $all | Select-Object -First 1 }
+    if($pick){
+      $cdn = "https://cdn.jsdelivr.net/npm/@fontsource/$pkg@${ver}/$pick"
+      $mirror = "https://unpkg.com/@fontsource/$pkg@${ver}/$pick"
+      return ,@($cdn,$mirror)
+    }
+  } catch { Log ("Fontsource API error ($Family): $($_.Exception.Message)") "WARN" }
+  @()
+}
+
+# 2) Google Fonts CSS2 → trích TTF từ gstatic bằng UA Android 4.4 (trả 'truetype')
+function Get-FontFromGoogleCSS {
+  param([string]$Family,[int]$Weight=400)
+  $famQuery = [uri]::EscapeDataString($Family) -replace '%20','+'
+  $cssUrl = "https://fonts.googleapis.com/css2?family=$famQuery:wght@$Weight&display=swap"
+  $ua = 'Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/KRT16M) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36'
+  try {
+    $css = Invoke-WebRequest -Headers @{ 'User-Agent'=$ua } -UseBasicParsing -TimeoutSec 60 $cssUrl
+    $ttf = ([regex]'url\(([^)]+\.ttf)\)').Matches($css.Content) | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
+    $ttf | Select-Object -Unique
+  } catch { Log ("GF CSS2 error ($Family): $($_.Exception.Message)") "WARN"; @() }
+}
+
+# 3) GitHub Contents API (google/fonts) – lấy tên file hiện tại
+function Get-FontFromGitHubGF {
+  param([string]$Family)
+  $folder = (To-PackageName $Family)
+  $api = "https://api.github.com/repos/google/fonts/contents/ofl/$folder"
+  try {
+    $list = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.10' } $api | ConvertFrom-Json
+    $ttf = $list | Where-Object { $_.type -eq 'file' -and $_.name -match '\.(ttf|otf)$' } | Select-Object -ExpandProperty name
+    $pick = ($ttf | Where-Object { $_ -match 'wght' } | Select-Object -First 1)
+    if(-not $pick){ $pick = $ttf | Select-Object -First 1 }
+    if($pick){
+      $raw = "https://raw.githubusercontent.com/google/fonts/main/ofl/$folder/$pick"
+      return ,@($raw)
+    }
+  } catch { Log ("GitHub GF API error ($Family): $($_.Exception.Message)") "WARN" }
+  @()
+}
+
+# Tổng hợp
+function Resolve-FontTTF { param([string]$Family)
+  $urls=@()
+  $urls += Get-FontFromFontsource $Family
+  if(-not $urls -or $urls.Count -lt 2){ $urls += Get-FontFromGoogleCSS $Family }
+  if(-not $urls){ $urls += Get-FontFromGitHubGF $Family }
+  $urls | Select-Object -Unique
+}
+
+# ===================== Core Helpers =====================
 function Download-File {
   param([string[]]$Urls,[string]$OutFile,[int]$Retry=2)
+  $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
   foreach($u in $Urls){
     for($i=1;$i -le $Retry;$i++){
       try {
         Log ("Download attempt {0}: {1}" -f $i,$u)
         if ($PSVersionTable.PSVersion.Major -ge 7) {
-          Invoke-WebRequest -Uri $u -OutFile $OutFile -TimeoutSec 240
+          Invoke-WebRequest -Uri $u -OutFile $OutFile -TimeoutSec 240 -Headers @{ 'User-Agent'=$ua }
         } else {
           try { Start-BitsTransfer -Source $u -Destination $OutFile -ErrorAction Stop }
-          catch { Invoke-WebRequest -Uri $u -OutFile $OutFile }
+          catch { Invoke-WebRequest -Uri $u -OutFile $OutFile -Headers @{ 'User-Agent'=$ua } }
         }
         if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { Log ("Download OK: {0}" -f $OutFile); return $true }
       } catch { Log ("Download error: {0}" -f $_.Exception.Message) "ERROR" }
-      Start-Sleep -Seconds ([Math]::Min(2*$i,8))
+      Start-Sleep -Seconds ([Math]::Min((Get-Random -Minimum 1 -Maximum 5)*$i,8))
     }
   }
   return $false
@@ -312,12 +221,8 @@ function Uninstall-One { param([string]$File)
     $reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
     $props = (Get-ItemProperty $reg -ErrorAction SilentlyContinue).PSObject.Properties |
       Where-Object { $_.Value -and ($_.Value -ieq $File) }
-    foreach($p in $props){
-      try { Remove-ItemProperty -Path $reg -Name $p.Name -ErrorAction SilentlyContinue } catch {}
-    }
-    if(Test-Path $full){
-      try { Remove-Item $full -Force -ErrorAction SilentlyContinue } catch {}
-    }
+    foreach($p in $props){ try { Remove-ItemProperty -Path $reg -Name $p.Name -ErrorAction SilentlyContinue } catch {} }
+    if(Test-Path $full){ try { Remove-Item $full -Force -ErrorAction SilentlyContinue } catch {} }
     Say ("Uninstalled file: {0}" -f $File) "Yellow"
     # update ownership list
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
@@ -362,14 +267,8 @@ function FBHash {
     foreach($root in @('HKLM','HKCU')){
       $sys=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink" -f $root)
       $sub=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
-      foreach($b in $bases){
-        $v=(Get-ItemProperty -Path $sys -Name $b -ErrorAction SilentlyContinue).$b
-        if($v){$rows+=("SYS[{0}]:{1}={2}" -f $root,$b,($v -join ';'))}
-      }
-      foreach($n in $bases){
-        $vv=(Get-ItemProperty -Path $sub -Name $n -ErrorAction SilentlyContinue).$n
-        if($vv){$rows+=("SUB[{0}]:{1}={2}" -f $root,$n,$vv)}
-      }
+      foreach($b in $bases){ $v=(Get-ItemProperty -Path $sys -Name $b -ErrorAction SilentlyContinue).$b; if($v){$rows+=("SYS[{0}]:{1}={2}" -f $root,$b,($v -join ';'))}}
+      foreach($n in $bases){ $vv=(Get-ItemProperty -Path $sub -Name $n -ErrorAction SilentlyContinue).$n; if($vv){$rows+=("SUB[{0}]:{1}={2}" -f $root,$n,$vv)}}
     }
     $bytes=[Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
     ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-','')
@@ -440,7 +339,7 @@ function Patch-ChromiumFonts {
   } catch { Say ("Chromium patch error: {0}" -f $_.Exception.Message) "Red" "ERROR" }
 }
 
-# -------------------- MAIN --------------------
+# ===================== MAIN =====================
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
 Write-Host ("  ADVANCED FONT FINGERPRINT ROTATOR v{0}" -f $Version) -ForegroundColor Yellow
@@ -451,11 +350,10 @@ $beforeInv = InvHash; $beforeFB = FBHash
 Say ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
 Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 
-# ========== ROUND LOOP to guarantee BOTH hashes change ==========
 for($round=1; $round -le $MaxRounds; $round++){
   Say ("--- ROUND {0} ---" -f $round) "White"
 
-  # 0) optional remove old owned fonts to force inventory change
+  # 0) Optional remove old owned fonts
   if(-not $KeepGrowth){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
     if($owned -and $owned.Count -gt 0){
@@ -468,39 +366,68 @@ for($round=1; $round -le $MaxRounds; $round++){
     }
   }
 
-  # 1) INSTALL fresh fonts — choose bias: Symbols/Emoji/Mono + mix Sans/Serif
-  $bag=@()
-  foreach($cat in $DB.Keys){ foreach($it in $DB[$cat]){ $bag += ,@{Cat=$cat;Item=$it} } }
-  # Always include: 1 Emoji + 2 SymbolsMath (nếu có)
-  $must=@()
-  if(($bag | Where-Object {$_.Cat -eq 'Emoji'}).Count){ $must += ($bag | Where-Object {$_.Cat -eq 'Emoji'} | Get-Random -Count 1) }
-  $symPool = $bag | Where-Object {$_.Cat -eq 'SymbolsMath'}
-  if($symPool.Count -ge 2){ $must += ($symPool | Get-Random -Count 2) } elseif($symPool.Count -gt 0){ $must += ($symPool | Get-Random -Count 1) }
-  $instTarget = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
-  $extraNeed  = [Math]::Max(0, $instTarget - $must.Count)
-  $extra      = ($bag | Where-Object { $must -notcontains $_ } | Get-Random -Count ([Math]::Min($extraNeed, $bag.Count)))
-  $todo       = $must + $extra
-
+  # 1) INSTALL fresh fonts via API + Unicode boosters
+  $target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
+  $familyBag=@()
+  foreach($cat in $FAMILIES.Keys){ foreach($fam in $FAMILIES[$cat]){ $familyBag += ,@{Cat=$cat;Fam=$fam} } }
+  $familyPick = $familyBag | Get-Random -Count ([Math]::Min($target, $familyBag.Count))
   $installed=0
-  foreach($t in $todo){
-    $urls=$t.Item.Urls
-    $first=$urls[0]
+
+  # bắt buộc cài boosters trước
+  foreach($b in ($UNICODE_BOOST | Get-Random -Count ([Math]::Min(3,$UNICODE_BOOST.Count)))){
+    $first = $b.Urls[0]; $name = $b.Name
     $out = Join-Path $TempDir ([IO.Path]::GetFileName($first))
-    if(Download-File -Urls $urls -OutFile $out){
-      $r = Install-One -SrcPath $out -Fallback $t.Item.Name
-      if($r){ $installed++ }
+    if(Download-File -Urls $b.Urls -OutFile $out){ if(Install-One -SrcPath $out -Fallback $name){ $installed++ } }
+  }
+
+  foreach($t in $familyPick){
+    $fam = $t.Fam
+    $urls = Resolve-FontTTF $fam
+    if($urls -and $urls.Count){
+      $fname = [IO.Path]::GetFileName((($urls[0] -split '\?')[0]))
+      if(-not $fname.EndsWith(".ttf") -and -not $fname.EndsWith(".otf")){ $fname = ($fam -replace '\s','') + ".ttf" }
+      $out = Join-Path $TempDir $fname
+      if(Download-File -Urls $urls -OutFile $out){
+        if(Install-One -SrcPath $out -Fallback $fam){ $installed++ }
+      } else { Say ("Download failed via API: {0}" -f $fam) "Red" "ERROR" }
     } else {
-      Say ("Download failed: {0}" -f ($urls -join " | ")) "Red" "ERROR"
+      Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR"
+    }
+  }
+
+  # Fallback cuối: nếu cài quá ít (network kém) → synth duplicate để đổi Inventory
+  if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){
+    $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
+    if($owned -and $owned.Count -gt 0){
+      $dupCount = [Math]::Min(3, $owned.Count)
+      foreach($f in ($owned | Get-Random -Count $dupCount)){
+        $src = Join-Path $FontsDir $f
+        if(Test-Path $src){
+          $new = ([IO.Path]::GetFileNameWithoutExtension($f)) + ("-{0}.ttf" -f (Get-Random -Minimum 1000 -Maximum 9999))
+          $dst = Join-Path $FontsDir $new
+          try {
+            Copy-Item $src $dst -Force
+            $reg="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+            $face = Get-FontFace $dst
+            $key = ("{0} (TrueType)" -f $face)
+            New-ItemProperty -Path $reg -Name $key -Value $new -PropertyType String -Force | Out-Null
+            $owned2 = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
+            if(-not $owned2){ $owned2=@() }; $owned2 = $owned2 + $new | Select-Object -Unique
+            New-ItemProperty -Path $StateKey -Name "Owned" -Value $owned2 -PropertyType MultiString -Force | Out-Null
+            Say ("Synthesized duplicate: {0}" -f $new) "Yellow"
+          } catch {}
+        }
+      }
     }
   }
 
   # 2) RANDOMIZE unicode glyph fallbacks
   $map = FaceMap
-  $sans  = PickFirst -Prefer @("Inter","Open Sans","Noto Sans","Roboto","Segoe UI","Work Sans") -Map $map
-  $serif = PickFirst -Prefer @("Merriweather","Lora","Noto Serif","Source Serif","Cambria","Times New Roman") -Map $map
+  $sans  = PickFirst -Prefer @("Inter","Open Sans","Noto Sans","Roboto","Segoe UI","Work Sans","Manrope") -Map $map
+  $serif = PickFirst -Prefer @("Merriweather","Lora","Noto Serif","Source Serif","Cambria","Times New Roman","Playfair Display") -Map $map
   $mono  = PickFirst -Prefer @("JetBrains Mono","Source Code Pro","Inconsolata","Cousine","Anonymous Pro","Consolas","Courier New") -Map $map
-  $sym1  = PickFirst -Prefer @("Noto Sans Math","Libertinus Math","Noto Sans Symbols 2") -Map $map
-  $sym2  = PickFirst -Prefer @("Noto Sans Symbols 2","Noto Music","Noto Sans") -Map $map
+  $sym1  = PickFirst -Prefer @("Noto Sans Math","Noto Sans Symbols 2") -Map $map
+  $sym2  = PickFirst -Prefer @("Noto Music","Noto Sans Symbols 2","Noto Sans") -Map $map
   $emoji = PickFirst -Prefer @("Noto Color Emoji") -Map $map -Exact
 
   $bases = @("Segoe UI","Segoe UI Variable","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas","Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2") | Get-Random -Count 12
@@ -521,7 +448,7 @@ for($round=1; $round -le $MaxRounds; $round++){
   if($mono){  Set-Sub "Courier New" $mono.Face; Set-Sub "Consolas" $mono.Face }
   Refresh-Fonts
 
-  # 3) Patch Chromium & kill processes (default)
+  # 3) Patch Chromium & kill processes
   if(-not $NoForceClose){ Kill-Browsers }
   if(-not $NoChromiumFonts){
     $sf = if($sans){$sans.Face}else{"Arial"}
@@ -553,7 +480,7 @@ for($round=1; $round -le $MaxRounds; $round++){
   }
 }
 
-# --- Results ---
+# --- Final
 $finalInv = InvHash; $finalFB = FBHash
 Say "`n--- FINAL HASHES ---" "Cyan"
 Say ("Inventory:  {0}" -f $finalInv) "White"
