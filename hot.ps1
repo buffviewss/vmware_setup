@@ -1,9 +1,10 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.6.1 (EU/US ONLY • PS 5.x SAFE)
-  - Chỉ dùng font Âu–Mỹ. KHÔNG xoá font hệ thống.
-  - Random cài font + random SystemLink & FontSubstitutes (HKLM & HKCU).
-  - BẮT BUỘC đổi cả InventoryHash & FallbackHash (re-roll nhiều lần).
-  - Logging: %USERPROFILE%\Downloads\log.txt
+  ADVANCED FONT FINGERPRINT ROTATOR v3.7 (EU/US ONLY • PS 5.x SAFE)
+  - EU/US fonts only (Latin/Greek/Cyrillic) — filters out Asian/RTL scripts
+  - Random install (only chosen packages), skip huge ZIPs (>25 MB via HEAD)
+  - Randomize SystemLink + FontSubstitutes (HKLM + HKCU)
+  - FORCE change both InventoryHash & FallbackHash every run (re-roll)
+  - Logs: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
 
 # ---- Admin check ----
@@ -33,7 +34,7 @@ $TempDir  = "$env:TEMP\FontRotator"
 $FontsDir = "$env:SystemRoot\Fonts"
 if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
 
-# ---- Sources (Âu–Mỹ) ----
+# ---- Sources (EU/US only, cố gắng ưu tiên link sống) ----
 $DB = @{
   Sans = @{
     "Inter"          = "https://github.com/rsms/inter/releases/download/v3.19/Inter-3.19.zip"
@@ -41,7 +42,6 @@ $DB = @{
     "Roboto"         = "https://github.com/googlefonts/roboto/releases/download/v2.138/roboto-unhinted.zip"
     "IBMPlex"        = "https://github.com/IBM/plex/releases/download/v6.4.0/TrueType.zip"
     "DejaVu"         = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
-    "Lato"           = "https://github.com/latofonts/lato-source/releases/download/Lato2OFL/latofonts-opensource.zip"
     "Raleway"        = "https://github.com/impallari/Raleway/archive/refs/heads/master.zip"
     "Montserrat"     = "https://github.com/JulietaUla/Montserrat/archive/refs/heads/master.zip"
   }
@@ -70,8 +70,24 @@ $DB = @{
 }
 
 # ---- Helpers ----
+$BlockedNamePattern = '(?i)(arabic|hebrew|thai|thaiLooped|kr\b|korean|jp\b|japanese|cjk|sc\b|tc\b|hans|hant|hangul|hiragana|katakana|lao|khmer|myanmar|devanagari|bengali|gurmukhi|gujarati|tamil|telugu|kannada|malayalam|odia|sinhala|ethiopic|armenian|georgian|syriac|urdu|farsi|persian|mongolian|tibetan|thaana|nko|vai|osmanya|yi|cherokee|canadian|lisu|tifinagh)'
+$PickNamePattern    = '(?i)(regular|book|roman|text|medium|normal)'
+
+function Try-Head { param([string]$Url)
+  try { return Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 25 } catch { return $null }
+}
+function Is-TooLargeZip { param([string]$Url,[int]$MaxMB=25)
+  $resp = Try-Head -Url $Url
+  if ($resp -and $resp.Headers['Content-Length']) {
+    $len = [int64]$resp.Headers['Content-Length']
+    if ($len -gt ($MaxMB*1MB)) { Log ("Skip large ZIP ({0} MB): {1}" -f [math]::Round($len/1MB,1),$Url) "WARN"; return $true }
+  }
+  return $false
+}
+
 function Download-File {
   param([string]$Url,[string]$OutFile,[int]$Retry=3)
+  if ($Url.ToLower().EndsWith(".zip") -and (Is-TooLargeZip -Url $Url -MaxMB 25)) { return $false }
   for($i=1;$i -le $Retry;$i++){
     try {
       Log ("Download attempt {0}: {1}" -f $i,$Url)
@@ -132,8 +148,9 @@ function Install-FromUrl { param([string]$Name,[string]$Url)
       try { Expand-Archive -Path $zip -DestinationPath $ex -Force }
       catch { Say ("Unzip error {0}: {1}" -f $Name,$_.Exception.Message) "Red" "ERROR"; return @() }
       $pick = Get-ChildItem $ex -Recurse -Include *.ttf,*.otf |
-        Where-Object { $_.Name -notmatch "italic|oblique|thin|hairline|light" } |
-        Sort-Object { if($_.Name -match "regular|normal"){0}elseif($_.Name -match "medium"){1}elseif($_.Name -match "semibold|demibold"){2}else{3} } |
+        Where-Object { $_.Name -notmatch $BlockedNamePattern } |
+        Where-Object { $_.Name -match $PickNamePattern } |
+        Sort-Object { if($_.Name -match "regular|normal"){0}elseif($_.Name -match "book|roman"){1}elseif($_.Name -match "medium|text"){2}else{3} } |
         Select-Object -First 4
       $res=@(); foreach($p in $pick){ $x=Install-One $p.FullName $Name; if($x){$res+=$x} }
       $res
@@ -260,7 +277,7 @@ function PickFirst { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
 # ---- MAIN ----
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
-Write-Host "  ADVANCED FONT FINGERPRINT ROTATOR v3.6.1 (EU/US ONLY)" -ForegroundColor Yellow
+Write-Host "  ADVANCED FONT FINGERPRINT ROTATOR v3.7 (EU/US ONLY)" -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Green
 Log ("OS: {0}  PS: {1}" -f [Environment]::OSVersion.VersionString, $PSVersionTable.PSVersion)
 
@@ -272,9 +289,9 @@ Say ("Current fonts: {0}" -f $beforeCount) "Cyan"
 Say ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
 Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 
-# --- 1) INSTALL NEW FONTS until InventoryHash changes ---
+# --- 1) INSTALL NEW FONTS until InventoryHash changes (<=3 vòng) ---
 function Install-Round {
-  param([int]$Target=7)
+  param([int]$Target=6)
   $cats = @($DB.Sans,$DB.Serif,$DB.Mono,$DB.SymbolsMath,$DB.Emoji)
   $pool=@()
   foreach($c in $cats){ foreach($k in $c.Keys){ $pool+=,@{Name=$k;Url=$c[$k]} } }
@@ -286,16 +303,16 @@ function Install-Round {
 $tries=0; $afterInv=$beforeInv
 do {
   $tries++
-  [void](Install-Round -Target (Get-Random -Minimum 6 -Maximum 10))
+  [void](Install-Round -Target (Get-Random -Minimum 5 -Maximum 8))
   Start-Sleep 1
   $afterInv = InvHash
 } while ($afterInv -eq $beforeInv -and $tries -lt 3)
 
-# --- 2) RANDOMIZE FALLBACKS until FallbackHash changes ---
+# --- 2) RANDOMIZE FALLBACKS until FallbackHash changes (<=7 vòng) ---
 function Apply-RandomFallback {
   $map = FaceMap
 
-  $sansDest  = PickFirst -Prefer @("Inter","Open Sans","Roboto","IBM Plex Sans","DejaVu Sans","Lato","Raleway","Montserrat") -Map $map
+  $sansDest  = PickFirst -Prefer @("Inter","Open Sans","Roboto","IBM Plex Sans","DejaVu Sans","Raleway","Montserrat") -Map $map
   $serifDest = PickFirst -Prefer @("Merriweather","Lora","Libre Baskerville","DejaVu Serif") -Map $map
   $monoDest  = PickFirst -Prefer @("Cascadia Mono","Cascadia Code","Fira Code","JetBrains Mono","Inconsolata","DejaVu Sans Mono","IBM Plex Mono") -Map $map
   $sym1      = PickFirst -Prefer @("XITS Math","Libertinus Math","Noto Sans Math","DejaVu Sans") -Map $map
