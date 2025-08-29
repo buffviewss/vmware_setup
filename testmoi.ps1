@@ -1,28 +1,30 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.7.1 (EU/US ONLY • PS 5.x SAFE)
-  - Mục tiêu: tăng biến thiên "Unicode Glyphs" fingerprint
-    + Ưu tiên/chen nguồn glyph Math/Symbols/Emoji/Mono/Serif vào fallback chain
-    + (Tuỳ chọn) Sửa default fonts của Chrome/Edge theo faces đã chọn
-  - KHÔNG spoof tên font để đổi phần "Font Metrics" trong bản này
-  - KHÔNG xoá font hệ thống. Chỉ dùng font Âu–Mỹ.
+  ADVANCED FONT FINGERPRINT ROTATOR v3.8.0 (LEAN DB • EU/US-First)
+  - Chỉ tải TTF/OTF trực tiếp (không .zip)
+  - Tập trung đổi "Unicode Glyphs" fingerprint qua SystemLink + Substitutes
+  - (Tuỳ chọn) Vá default fonts của Chrome/Edge
+  - Mặc định cài rất ít font (2–4) để nhanh; có thể tắt hoàn toàn
+  - Logging: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
 
 param(
   [switch]$ChromiumFonts = $false,
   [string]$ChromeProfile = "Default",
-  [string]$EdgeProfile   = "Default"
+  [string]$EdgeProfile   = "Default",
+  [int]$TargetMin = 2,     # số font tối thiểu sẽ cài (0 = không cài)
+  [int]$TargetMax = 4      # số font tối đa sẽ cài (<= count DB)
 )
 
-# ---- Admin check ----
+# ------------ Admin check ------------
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
    ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
   Write-Host "ERROR: Run PowerShell as Administrator!" -ForegroundColor Red
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.7.1"
+$Version = "3.8.0"
 
-# ---- Logging ----
+# ------------ Logging ------------
 $DownloadDir = Join-Path $env:USERPROFILE 'Downloads'
 if (!(Test-Path $DownloadDir)) { New-Item -ItemType Directory -Path $DownloadDir -Force | Out-Null }
 $LogFile = Join-Path $DownloadDir 'log.txt'
@@ -37,62 +39,196 @@ function Say { param([string]$m,[string]$c="Cyan",[string]$lvl="INFO")
 }
 function Head32 { param($s) if($s -and $s.Length -ge 32){$s.Substring(0,32)}elseif($s){$s}else{"NA"} }
 
-# ---- Paths ----
+# ------------ Paths ------------
 $TempDir  = "$env:TEMP\FontRotator"
 $FontsDir = "$env:SystemRoot\Fonts"
 if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
 
-# ---- Sources (Âu–Mỹ) ----
+# ============================================================
+#   LEAN DB — 100+ DIRECT TTF/OTF LINKS (Google/Noto trusted)
+#   (Nếu 1–2 link lỗi 404, script tự bỏ qua và chọn link khác)
+# ============================================================
 $DB = @{
-  Sans = @{
-    "Inter"          = "https://github.com/rsms/inter/releases/download/v3.19/Inter-3.19.zip"
-    "OpenSans"       = "https://github.com/googlefonts/opensans/releases/download/v3.000/opensans.zip"
-    "Roboto"         = "https://github.com/googlefonts/roboto/releases/download/v2.138/roboto-unhinted.zip"
-    "IBMPlex"        = "https://github.com/IBM/plex/releases/download/v6.4.0/TrueType.zip"
-    "DejaVu"         = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
-    "Lato"           = "https://github.com/latofonts/lato-source/releases/download/Lato2OFL/latofonts-opensource.zip"
-    "Raleway"        = "https://github.com/impallari/Raleway/archive/refs/heads/master.zip"
-    "Montserrat"     = "https://github.com/JulietaUla/Montserrat/archive/refs/heads/master.zip"
-  }
-  Serif = @{
-    "Merriweather"   = "https://github.com/SorkinType/Merriweather/archive/refs/heads/master.zip"
-    "Lora"           = "https://github.com/cyrealtype/Lora-Cyrillic/archive/refs/heads/master.zip"
-    "LibreBaskerville"="https://github.com/impallari/Libre-Baskerville/archive/refs/heads/master.zip"
-    "DejaVuSerif"    = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
-  }
-  Mono = @{
-    "CascadiaCode"   = "https://github.com/microsoft/cascadia-code/releases/download/v2111.01/CascadiaCode-2111.01.zip"
-    "FiraCode"       = "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip"
-    "JetBrainsMono"  = "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip"
-    "Inconsolata"    = "https://github.com/googlefonts/Inconsolata/releases/download/v3.000/fonts_ttf.zip"
-    "DejaVuMono"     = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
-  }
-  SymbolsMath = @{
-    "XITSMath"       = "https://github.com/khaledhosny/xits-fonts/releases/download/v1.301/xits-math-otf-1.301.zip"
-    "LibertinusMath" = "https://github.com/alerque/libertinus/releases/download/v7.040/LibertinusMath-Regular.otf"
-    "DejaVuSans"     = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
-    "NotoSansMath"   = "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf"
-  }
-  Emoji = @{
-    "NotoColorEmoji" = "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf"
-  }
+  Sans = @(
+    "https://github.com/google/fonts/raw/main/ofl/roboto/static/Roboto-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/opensans/static/OpenSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/inter/static/Inter-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/raleway/static/Raleway-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/lato/static/Lato-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/nunito/static/Nunito-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/nunitosans/static/NunitoSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins%5Bwght%5D.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/manrope/static/Manrope-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/urbanist/static/Urbanist-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/worksans/static/WorkSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/dmsans/static/DMSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/karla/static/Karla-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/mulish/static/Mulish-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/rubik/static/Rubik-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/cabin/static/Cabin-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/asap/static/Asap-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/ibmplexsans/IBMPlexSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/ptserif/PTSerif-Regular.ttf", # (Serif name in ofl, but keep diversity)
+    "https://github.com/google/fonts/raw/main/ofl/ptsans/PTSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/lexend/static/Lexend-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/heebo/static/Heebo-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/outfit/static/Outfit-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/sora/static/Sora-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/plusjakartasans/static/PlusJakartaSans-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/ttcommonspro?dummy=skip" # placeholder safety
+  )
+  Serif = @(
+    "https://github.com/google/fonts/raw/main/ofl/merriweather/Merriweather-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/lora/static/Lora-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/static/PlayfairDisplay-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/sourceserif4/static/SourceSerif4-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/cardos/Cardo-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/crimsonpro/static/CrimsonPro-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/cormorantgaramond/static/CormorantGaramond-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/oldstandardtt/OldStandardTT-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/abrilfatface/AbrilFatface-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/ibmplexserif/IBMPlexSerif-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/domine/static/Domine-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/spectral/static/Spectral-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/noto-serif/static/NotoSerif-Regular.ttf" # Alt path; some repos use noto-fonts (see below)
+  )
+  Mono = @(
+    "https://github.com/google/fonts/raw/main/ofl/inconsolata/static/Inconsolata-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/sourcecodepro/static/SourceCodePro-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/jetbrainsmono/static/JetBrainsMono-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/spacemono/SpaceMono-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/ibmplexmono/IBMPlexMono-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/overpassmono/OverpassMono-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/redhatmono/static/RedHatMono-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/ptmono/PTMono-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/anonymouspro/AnonymousPro-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/cousine/Cousine-Regular.ttf"
+  )
+  SymbolsMath = @(
+    # Noto (trusted raw)
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansDisplay/NotoSansDisplay-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSerifDisplay/NotoSerifDisplay-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSerif/NotoSerif-Regular.ttf",
+    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMono/NotoSansMono-Regular.ttf"
+  )
+  Emoji = @(
+    "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf"
+  )
 }
 
-# ---- Helpers ----
+# ---- BỔ SUNG thêm nhiều Google Fonts trực tiếp để tổng pool ~100 ----
+$More = @(
+  "https://github.com/google/fonts/raw/main/ofl/assistant/static/Assistant-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/alata/Alata-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/arimo/static/Arimo-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/barlow/static/Barlow-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/barlowcondensed/static/BarlowCondensed-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/catamaran/static/Catamaran-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/chivo/static/Chivo-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/exo2/static/Exo2-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/ibmplexsanscondensed/IBMPlexSansCondensed-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/kantumruypro/static/KantumruyPro-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/kanit/static/Kanit-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/laborunion/LaborUnion-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/lalezar/Lalezar-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/mada/static/Mada-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/mavenpro/static/MavenPro-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/merriweathersans/MerriweatherSans-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/metropolis/Metropolis-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/michroma/Michroma-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/molengo/Molengo-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/monda/Monda-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/monoair/Monoair-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/notosansdisplay/static/NotoSansDisplay-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/overpass/static/Overpass-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/philosopher/Philosopher-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/poiretone/PoiretOne-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/pontanosans/PontanoSans-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/pragati/PragatiNarrow-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/prompt/static/Prompt-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/publicsans/static/PublicSans-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/quantico/Quantico-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/quicksand/static/Quicksand-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/rasa/static/Rasa-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/recursivesanscasual/static/RecursiveSansCasual-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/rokkitt/static/Rokkitt-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/rosario/Rosario%5Bwght%5D.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/rozhaone/RozhaOne-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/sarabun/static/Sarabun-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/shipporimincho/ShipporiMincho-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/signika/static/Signika-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/spartan/static/Spartan-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/specialelite/SpecialElite-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/taviraj/Taviraj-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/tinos/Tinos-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/titilliumweb/TitilliumWeb-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/ubuntu/Ubuntu%5Bit,wght%5D.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/abel/Abel-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/alegreya/static/Alegreya-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/alegreyasans/static/AlegreyaSans-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/alef/Alef-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/armata/Armata-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/arvo/Arvo-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/asapcondensed/AsapCondensed-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/assistant/static/Assistant-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/avenirnextltpro/AvenirNextLTPro-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/baskervville/Baskervville-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/bellefair/Bellefair-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/cardo/Cardo-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/cinzel/static/Cinzel-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/croissantone/CroissantOne-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/cutive/Cutive-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/ebgaramond/EBGaramond-VariableFont_wght.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/elsie/Elsie-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/fanwoodtext/FanwoodText-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/faustina/static/Faustina-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/gelasio/static/Gelasio-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/gentiumbookplus/static/GentiumBookPlus-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/italiana/Italiana-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/josefinslab/static/JosefinSlab-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/literata/static/Literata-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/lusitana/Lusitana-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/mate/Mate-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/meddon/Meddon.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/notosans/static/NotoSans-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/notoserif/static/NotoSerif-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/philosopher/Philosopher-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/play/Play-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/ptsansnarrow/PTSansNarrow-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/questrial/Questrial-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/robotoslab/static/RobotoSlab-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/rye/Rye-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/sortsMillgoudy/SortsMillGoudy-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/sourcecodepro/static/SourceCodePro-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/sourcesans3/static/SourceSans3-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/spacemono/SpaceMono-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/trirong/Trirong-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/ultra/Ultra-Regular.ttf",
+  "https://github.com/google/fonts/raw/main/ofl/yrsa/Yrsa-Regular.ttf"
+)
+$DB.Sans += $More
+
+# ------------ Helpers (only TTF/OTF) ------------
 function Download-File {
-  param([string]$Url,[string]$OutFile,[int]$Retry=3)
+  param([string]$Url,[string]$OutFile,[int]$Retry=2)
   for($i=1;$i -le $Retry;$i++){
     try {
       Log ("Download attempt {0}: {1}" -f $i,$Url)
       if ($PSVersionTable.PSVersion.Major -ge 7) {
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -TimeoutSec 300
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -TimeoutSec 180
       } else {
         try { Start-BitsTransfer -Source $Url -Destination $OutFile -ErrorAction Stop }
         catch { Invoke-WebRequest -Uri $Url -OutFile $OutFile }
       }
       if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { Log ("Download OK: {0}" -f $OutFile); return $true }
     } catch { Log ("Download error: {0}" -f $_.Exception.Message) "ERROR" }
-    Start-Sleep -Seconds ([Math]::Min(2*$i,10))
+    Start-Sleep -Seconds ([Math]::Min(2*$i,6))
   }
   Log ("Download failed: {0}" -f $Url) "ERROR"; return $false
 }
@@ -125,30 +261,16 @@ function Install-One { param([string]$File,[string]$Fallback="Custom")
   } catch { Say ("Install error: {0}" -f $_.Exception.Message) "Red" "ERROR"; return $null }
 }
 
-function Install-FromUrl { param([string]$Name,[string]$Url)
+function Install-FromUrl { param([string]$Url)
   try {
     $lower = $Url.ToLower()
-    if ($lower.EndsWith(".ttf") -or $lower.EndsWith(".otf")) {
-      $out = Join-Path $TempDir ([IO.Path]::GetFileName($Url))
-      if (!(Download-File $Url $out)) { Say ("Download failed: {0}" -f $Name) "Red" "ERROR"; return @() }
-      $r = Install-One -File $out -Fallback $Name
-      if ($r){,@($r)} else {@()}
-    } elseif ($lower.EndsWith(".zip")) {
-      $zip = Join-Path $TempDir "$Name.zip"
-      if (!(Download-File $Url $zip)) { Say ("Download failed: {0}" -f $Name) "Red" "ERROR"; return @() }
-      $ex = Join-Path $TempDir ("ex_" + $Name)
-      if (Test-Path $ex) { Remove-Item $ex -Recurse -Force -ErrorAction SilentlyContinue }
-      try { Expand-Archive -Path $zip -DestinationPath $ex -Force }
-      catch { Say ("Unzip error {0}: {1}" -f $Name,$_.Exception.Message) "Red" "ERROR"; return @() }
-      $pick = Get-ChildItem $ex -Recurse -Include *.ttf,*.otf |
-        Where-Object { $_.Name -notmatch "italic|oblique|thin|hairline|light" } |
-        Sort-Object { if($_.Name -match "regular|normal"){0}elseif($_.Name -match "medium"){1}elseif($_.Name -match "semibold|demibold"){2}else{3} } |
-        Select-Object -First 4
-      $res=@(); foreach($p in $pick){ $x=Install-One $p.FullName $Name; if($x){$res+=$x} }
-      $res
-    } else {
-      Say ("Unsupported URL type: {0}" -f $Url) "Yellow" "WARN"; @()
+    if (!($lower.EndsWith(".ttf") -or $lower.EndsWith(".otf"))) {
+      Say ("Skip non-ttf/otf: {0}" -f $Url) "Yellow" "WARN"; return @()
     }
+    $out = Join-Path $TempDir ([IO.Path]::GetFileName($Url))
+    if (!(Download-File $Url $out)) { Say ("Download failed: {0}" -f $Url) "Red" "ERROR"; return @() }
+    $r = Install-One -File $out -Fallback "Custom"
+    if ($r){,@($r)} else {@()}
   } catch { Say ("Install-FromUrl error: {0}" -f $_.Exception.Message) "Red" "ERROR"; @() }
 }
 
@@ -263,8 +385,7 @@ function PickFirst { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
         }
       }
     }
-  }
-  $null
+  } $null
 }
 
 # ---- Chromium default fonts patch ----
@@ -282,7 +403,6 @@ function Patch-ChromiumFonts {
   try {
     $bak = "$PrefsPath.bak_{0}" -f (Get-Date -Format "yyyyMMddHHmmss")
     Copy-Item $PrefsPath $bak -Force -ErrorAction SilentlyContinue | Out-Null
-
     $json = Get-Content $PrefsPath -Raw | ConvertFrom-Json
     if(!$json.webkit){ $json | Add-Member -NotePropertyName webkit -NotePropertyValue @{webprefs=@{fonts=@{}}} -Force }
     if(!$json.webkit.webprefs){ $json.webkit.webprefs = @{fonts=@{}} }
@@ -306,10 +426,10 @@ function Patch-ChromiumFonts {
   }
 }
 
-# ---- MAIN ----
+# -------------------- MAIN --------------------
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
-Write-Host ("  ADVANCED FONT FINGERPRINT ROTATOR v{0} (EU/US ONLY)" -f $Version) -ForegroundColor Yellow
+Write-Host ("  ADVANCED FONT FINGERPRINT ROTATOR v{0} (LEAN DB)" -f $Version) -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Green
 Log ("OS: {0}  PS: {1}" -f [Environment]::OSVersion.VersionString, $PSVersionTable.PSVersion)
 
@@ -321,42 +441,53 @@ Say ("Current fonts: {0}" -f $beforeCount) "Cyan"
 Say ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
 Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 
-# --- 1) INSTALL NEW FONTS until InventoryHash changes ---
-function Install-Round { param([int]$Target=7)
-  $cats = @($DB.Sans,$DB.Serif,$DB.Mono,$DB.SymbolsMath,$DB.Emoji)
+# --- 1) OPTIONAL: INSTALL FEW DIRECT TTF/OTF ---
+function Install-Round {
+  param([int]$Min=2,[int]$Max=4)
   $pool=@()
-  foreach($c in $cats){ foreach($k in $c.Keys){ $pool+=,@{Name=$k;Url=$c[$k]} } }
-  $todo = $pool | Get-Random -Count ([Math]::Min($Target,$pool.Count))
-  $installed=0
-  foreach($i in $todo){ $list = Install-FromUrl -Name $i.Name -Url $i.Url; $installed += $list.Count }
-  return $installed
+  foreach($k in $DB.Keys){ foreach($u in $DB[$k]){ if($u){ $pool += ,@{Url=$u} } } }
+  if($pool.Count -eq 0 -or $Max -le 0){ return 0 }
+  $count = Get-Random -Minimum $Min -Maximum ([Math]::Min($Max, [Math]::Max(1,$pool.Count))+1)
+  $todo  = $pool | Get-Random -Count $count
+  $ok=0
+  foreach($x in $todo){
+    $list = Install-FromUrl -Url $x.Url
+    $ok += $list.Count
+  }
+  return $ok
 }
-$tries=0; $afterInv=$beforeInv
-do {
-  $tries++
-  [void](Install-Round -Target (Get-Random -Minimum 6 -Maximum 10))
-  Start-Sleep 1
-  $afterInv = InvHash
-} while ($afterInv -eq $beforeInv -and $tries -lt 3)
 
-# --- 2) RANDOMIZE FALLBACKS (Unicode Glyphs) until FallbackHash changes ---
+$tries=0; $afterInv=$beforeInv
+if($TargetMax -gt 0){
+  do {
+    $tries++
+    [void](Install-Round -Min $TargetMin -Max $TargetMax)
+    Start-Sleep 1
+    $afterInv = InvHash
+  } while ($afterInv -eq $beforeInv -and $tries -lt 2)  # 1-2 vòng là đủ
+} else {
+  $afterInv = $beforeInv
+  Say "FAST MODE: Không cài thêm font." "Yellow"
+}
+
+# --- 2) RANDOMIZE FALLBACKS (Unicode Glyphs) ---
 function Apply-RandomFallback {
   $map = FaceMap
 
-  $sansDest  = PickFirst -Prefer @("Inter","Open Sans","Roboto","IBM Plex Sans","DejaVu Sans","Lato","Raleway","Montserrat") -Map $map
-  $serifDest = PickFirst -Prefer @("Merriweather","Lora","Libre Baskerville","DejaVu Serif") -Map $map
-  $monoDest  = PickFirst -Prefer @("Cascadia Mono","Cascadia Code","Fira Code","JetBrains Mono","Inconsolata","DejaVu Sans Mono","IBM Plex Mono") -Map $map
-  $sym1      = PickFirst -Prefer @("XITS Math","Libertinus Math","Noto Sans Math","DejaVu Sans") -Map $map
-  $sym2      = PickFirst -Prefer @("DejaVu Sans","XITS Math","Libertinus Math","Noto Sans Math") -Map $map
+  $sansDest  = PickFirst -Prefer @("Inter","Open Sans","Roboto","IBM Plex Sans","DejaVu Sans","Lato","Raleway","Montserrat","Noto Sans","Nunito Sans","Work Sans") -Map $map
+  $serifDest = PickFirst -Prefer @("Merriweather","Lora","Libre Baskerville","Source Serif","Noto Serif","Playfair Display","Domine","Spectral","Cardo") -Map $map
+  $monoDest  = PickFirst -Prefer @("JetBrains Mono","Source Code Pro","Inconsolata","Cousine","Anonymous Pro","IBM Plex Mono","Space Mono","PT Mono","Overpass Mono") -Map $map
+  $sym1      = PickFirst -Prefer @("Noto Sans Math","Noto Sans Symbols 2","Noto Music") -Map $map
+  $sym2      = PickFirst -Prefer @("Noto Sans Symbols 2","Noto Sans","Noto Serif") -Map $map
   $emojiDest = PickFirst -Prefer @("Noto Color Emoji") -Map $map -Exact
 
   $base = @("Segoe UI","Segoe UI Variable","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas","Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2") | Get-Random -Count 12
 
-  # pairs tổng hợp
   $pairs=@()
   foreach($p in @($sansDest,$serifDest,$monoDest)) { if($p){ $pairs+=$p.Pair } }
   if($sym1){ $pairs = ,$sym1.Pair + $pairs }
   if($sym2){ $pairs += $sym2.Pair }
+
   foreach($b in $base){
     if($pairs.Count -gt 0){
       $take = Get-Random -Minimum 2 -Maximum ([Math]::Min(5,$pairs.Count)+1)
@@ -372,7 +503,7 @@ function Apply-RandomFallback {
   if($sym1){      Set-Sub "Segoe UI Symbol" $sym1.Face; Set-Sub "Cambria Math" $sym1.Face }
   if($emojiDest){ Set-Sub "Segoe UI Emoji" $emojiDest.Face }
 
-  # Force-prepend coverage để đổi nguồn glyph rõ rệt
+  # Force-prepend để đổi nguồn glyph rõ rệt
   if($sym1 -and $monoDest){ Prepend-Link -Base "Arial"           -Pairs @($sym1.Pair,$monoDest.Pair) }
   if($serifDest -and $sym1){ Prepend-Link -Base "Times New Roman" -Pairs @($serifDest.Pair,$sym1.Pair) }
   if($monoDest -and $sym1){  Prepend-Link -Base "Courier New"     -Pairs @($monoDest.Pair,$sym1.Pair) }
@@ -382,24 +513,17 @@ function Apply-RandomFallback {
   if($sym1){                 Prepend-Link -Base "Cambria Math"    -Pairs @($sym1.Pair) }
 
   Refresh-Fonts
-
-  return @{
-    Sans=$sansDest; Serif=$serifDest; Mono=$monoDest; Sym=$sym1; Emoji=$emojiDest
-  }
+  return @{Sans=$sansDest;Serif=$serifDest;Mono=$monoDest;Sym=$sym1;Emoji=$emojiDest}
 }
 
-$fbTries=0; $afterFB=$beforeFB; $targets=$null
-do {
-  $fbTries++
-  $targets = Apply-RandomFallback
-  $afterFB = FBHash
-} while ($afterFB -eq $beforeFB -and $fbTries -lt 7)
+$targets = Apply-RandomFallback
+$afterFB = FBHash
 
-# --- (Tuỳ chọn) Patch Chrome/Edge default fonts ---
+# --- 3) (Optional) Patch Chrome/Edge default fonts ---
 if($ChromiumFonts){
   $sansFace  = if($targets.Sans){ $targets.Sans.Face } else { "Inter" }
   $serifFace = if($targets.Serif){ $targets.Serif.Face } else { "Merriweather" }
-  $monoFace  = if($targets.Mono){ $targets.Mono.Face } else { "Cascadia Code" }
+  $monoFace  = if($targets.Mono){ $targets.Mono.Face } else { "Source Code Pro" }
 
   $chrome = Join-Path $env:LOCALAPPDATA ("Google\Chrome\User Data\{0}\Preferences" -f $ChromeProfile)
   $edge   = Join-Path $env:LOCALAPPDATA ("Microsoft\Edge\User Data\{0}\Preferences" -f $EdgeProfile)
