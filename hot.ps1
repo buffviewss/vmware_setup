@@ -1,263 +1,336 @@
-# =================== ADVANCED FONT FP ROTATOR v3.7 (PS 5.x, Full + Emoji) ===================
-# Mục tiêu: Mỗi lần chạy đều cố gắng đổi được cả Inventory (nếu cài mới) và Fallback (Unicode Glyphs)
-# - Cài tối đa 5 font EU/US + Unicode packs (Emoji/Symbols2/Math/Music)
-# - Nếu font đã có: KHÔNG tải lại, NHƯNG sẽ random & set lại SystemLink EXACT (không cộng dồn)
-# - Substitutes cũng random khác giá trị hiện tại khi có thể
-# - Ghi Log vào Downloads, flush Font Cache, không mở browser
-# ============================================================================================
+<# ===================================================================
+  ADVANCED FONT FINGERPRINT ROTATOR v3.6 (EU/US ONLY • PS 5.x SAFE)
+  - Cài thêm font (Âu–Mỹ), không xoá font hệ thống
+  - Fallback thực sự: SystemLink + FontSubstitutes (HKLM + HKCU)
+  - BẮT BUỘC đổi cả InventoryHash & FallbackHash mỗi lần chạy
+  - Logging: %USERPROFILE%\Downloads\log.txt
+=================================================================== #>
 
+# ---- Admin check ----
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
- ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) { Write-Host "⚠️  Hãy chạy PowerShell bằng Run as Administrator." -f Yellow; return }
-
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-
-$StartTime  = Get-Date
-$FontsDir   = "$env:WINDIR\Fonts"
-$HKLM_FONTS = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-$HKLM_LINK  = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
-$HKCU_LINK  = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
-$HKLM_SUBST = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
-$HKCU_SUBST = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
-$LogPath    = Join-Path ([Environment]::GetFolderPath('UserProfile')) ("Downloads\FontFP_{0:yyyyMMdd_HHmmss}.log" -f $StartTime)
-
-# ---------- Logger ----------
-$sw = New-Object System.IO.StreamWriter($LogPath, $false, [Text.Encoding]::UTF8); $sw.AutoFlush=$true
-function Log([string]$lvl,[string]$msg){
-  $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}" -f (Get-Date),$lvl,$msg
-  $sw.WriteLine($line); Write-Host $line -ForegroundColor (if($lvl -eq 'ERROR'){'Red'} elseif($lvl -eq 'WARN'){'Yellow'} elseif($lvl -eq 'OK'){'Green'} else {'Cyan'})
+   ).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+  Write-Host "ERROR: Run PowerShell as Administrator!" -ForegroundColor Red
+  Read-Host "Press Enter to exit"; exit 1
 }
-function Close-Log { $sw.Flush(); $sw.Close() }
-function Ensure-Key($p){ if(-not (Test-Path $p)){ New-Item -Path $p -Force | Out-Null } }
 
-# ---------- Hash helpers ----------
-function Sha32([string[]]$arr){
-  $s=[string]::Join('|',($arr|%{ $_.ToString() }))
-  $d=[System.Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))
-  ($d|%{ $_.ToString('x2') }) -join ''
+# ---- Logging ----
+$DownloadDir = Join-Path $env:USERPROFILE 'Downloads'
+if (!(Test-Path $DownloadDir)) { New-Item -ItemType Directory -Path $DownloadDir -Force | Out-Null }
+$LogFile = Join-Path $DownloadDir 'log.txt'
+Add-Content $LogFile "`n=== RUN $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+
+function Log { param([string]$msg,[string]$lvl="INFO")
+  try { Add-Content $LogFile ("[{0}] [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$lvl,$msg) } catch {}
 }
-function Get-InventoryHash(){
-  try{
-    $items=(Get-ItemProperty $HKLM_FONTS).psobject.Properties|?{ $_.Name -notmatch '^PS' }|
-      Sort-Object Name | % { "{0}={1}" -f $_.Name,$_.Value }
-    Sha32 $items
-  }catch{"NA"}
+function Say { param([string]$m,[string]$c="Cyan",[string]$lvl="INFO")
+  Write-Host "[$(Get-Date -Format HH:mm:ss)] $m" -ForegroundColor $c
+  Log $m $lvl
 }
-function Get-FallbackHash(){
-  try{
-    $families=@("Segoe UI","Segoe UI Variable","Arial","Times New Roman","Calibri",
-                "Consolas","Courier New","Comic Sans MS","Impact","Microsoft Sans Serif",
-                "Segoe UI Symbol","Segoe UI Emoji")
-    $collect=@()
-    foreach($root in @($HKLM_LINK,$HKCU_LINK)){
-      if(Test-Path $root){
-        foreach($f in $families){
-          try{
-            $v=(Get-ItemProperty -Path $root -Name $f -ErrorAction Stop).$f
-            if($v -is [string]){ $v=@($v) }
-            $collect += "{0}@{1}=[{2}]" -f $root,$f,([string]::Join(',', $v))
-          }catch{}
-        }
+function Head32 { param($s) if($s -and $s.Length -ge 32){$s.Substring(0,32)}elseif($s){$s}else{"NA"} }
+
+# ---- Paths ----
+$TempDir  = "$env:TEMP\FontRotator"
+$FontsDir = "$env:SystemRoot\Fonts"
+if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
+
+# ---- Sources (Âu–Mỹ) ----
+$DB = @{
+  Sans = @{
+    "Inter"          = "https://github.com/rsms/inter/releases/download/v3.19/Inter-3.19.zip"
+    "OpenSans"       = "https://github.com/googlefonts/opensans/releases/download/v3.000/opensans.zip"
+    "Roboto"         = "https://github.com/googlefonts/roboto/releases/download/v2.138/roboto-unhinted.zip"
+    "IBMPlex"        = "https://github.com/IBM/plex/releases/download/v6.4.0/TrueType.zip"
+    "DejaVu"         = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
+    "Lato"           = "https://github.com/latofonts/lato-source/releases/download/Lato2OFL/latofonts-opensource.zip"
+    "Raleway"        = "https://github.com/impallari/Raleway/archive/refs/heads/master.zip"
+    "Montserrat"     = "https://github.com/JulietaUla/Montserrat/archive/refs/heads/master.zip"
+  }
+  Serif = @{
+    "Merriweather"   = "https://github.com/SorkinType/Merriweather/archive/refs/heads/master.zip"
+    "Lora"           = "https://github.com/cyrealtype/Lora-Cyrillic/archive/refs/heads/master.zip"
+    "LibreBaskerville"="https://github.com/impallari/Libre-Baskerville/archive/refs/heads/master.zip"
+    "DejaVuSerif"    = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
+  }
+  Mono = @{
+    "CascadiaCode"   = "https://github.com/microsoft/cascadia-code/releases/download/v2111.01/CascadiaCode-2111.01.zip"
+    "FiraCode"       = "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip"
+    "JetBrainsMono"  = "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip"
+    "Inconsolata"    = "https://github.com/googlefonts/Inconsolata/releases/download/v3.000/fonts_ttf.zip"
+    "DejaVuMono"     = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
+  }
+  SymbolsMath = @{
+    "XITSMath"       = "https://github.com/khaledhosny/xits-fonts/releases/download/v1.301/xits-math-otf-1.301.zip"
+    "LibertinusMath" = "https://github.com/alerque/libertinus/releases/download/v7.040/LibertinusMath-Regular.otf"
+    "DejaVuSans"     = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
+    "NotoSansMath"   = "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf"
+  }
+  Emoji = @{
+    "NotoColorEmoji" = "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf"
+  }
+}
+
+# ---- Helpers ----
+function Download-File {
+  param([string]$Url,[string]$OutFile,[int]$Retry=3)
+  for($i=1;$i -le $Retry;$i++){
+    try {
+      Log "Download attempt $i: $Url"
+      if ($PSVersionTable.PSVersion.Major -ge 7) {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -TimeoutSec 300
+      } else {
+        try { Start-BitsTransfer -Source $Url -Destination $OutFile -ErrorAction Stop }
+        catch { Invoke-WebRequest -Uri $Url -OutFile $OutFile }
+      }
+      if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { Log "Download OK: $OutFile"; return $true }
+    } catch { Log ("Download error: " + $_.Exception.Message) "ERROR" }
+    Start-Sleep -Seconds ([Math]::Min(2*$i,10))
+  }
+  Log "Download failed: $Url" "ERROR"; return $false
+}
+
+function Get-FontFace { param([string]$Path)
+  try {
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $pfc = New-Object System.Drawing.Text.PrivateFontCollection
+    $pfc.AddFontFile($Path)
+    if ($pfc.Families.Count -gt 0) { return $pfc.Families[0].Name }
+  } catch { Log ("Get-FontFace error: " + $_.Exception.Message) "WARN" }
+  return [IO.Path]::GetFileNameWithoutExtension($Path)
+}
+
+function Install-One { param([string]$File,[string]$Fallback="Custom")
+  try {
+    $fi = Get-Item $File
+    $dest = Join-Path $FontsDir $fi.Name
+    if (Test-Path $dest) { Say "Exists: $($fi.Name)" "Gray"; return $null }
+    Copy-Item $fi.FullName $dest -Force
+    $ext = $fi.Extension.ToLower()
+    $type = if ($ext -eq ".ttf" -or $ext -eq ".ttc") { "TrueType" } else { "OpenType" }
+    $face = if ($ext -ne ".ttc") { Get-FontFace $dest } else { $Fallback }
+    $reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    $key = "$face ($type)"
+    try { Set-ItemProperty -Path $reg -Name $key -Value $fi.Name -ErrorAction Stop }
+    catch { New-ItemProperty -Path $reg -Name $key -Value $fi.Name -PropertyType String -Force | Out-Null }
+    Say ("Installed: {0} -> {1}" -f $face,$fi.Name) "Green"
+    return @{Face=$face;File=$fi.Name}
+  } catch { Say ("Install error: " + $_.Exception.Message) "Red" "ERROR"; return $null }
+}
+
+function Install-FromUrl { param([string]$Name,[string]$Url)
+  try {
+    $lower = $Url.ToLower()
+    if ($lower.EndsWith(".ttf") -or $lower.EndsWith(".otf")) {
+      $out = Join-Path $TempDir ([IO.Path]::GetFileName($Url))
+      if (!(Download-File $Url $out)) { Say "Download failed: $Name" "Red" "ERROR"; return @() }
+      $r = Install-One -File $out -Fallback $Name
+      if ($r){,@($r)} else {@()}
+    } elseif ($lower.EndsWith(".zip")) {
+      $zip = Join-Path $TempDir "$Name.zip"
+      if (!(Download-File $Url $zip)) { Say "Download failed: $Name" "Red" "ERROR"; return @() }
+      $ex = Join-Path $TempDir ("ex_" + $Name)
+      if (Test-Path $ex) { Remove-Item $ex -Recurse -Force -ErrorAction SilentlyContinue }
+      try { Expand-Archive -Path $zip -DestinationPath $ex -Force } catch { Say ("Unzip error $Name: "+$_.Exception.Message) "Red" "ERROR"; return @() }
+      $pick = Get-ChildItem $ex -Recurse -Include *.ttf,*.otf |
+        Where-Object { $_.Name -notmatch "italic|oblique|thin|hairline|light" } |
+        Sort-Object { if($_.Name -match "regular|normal"){0}elseif($_.Name -match "medium"){1}elseif($_.Name -match "semibold|demibold"){2}else{3} } |
+        Select-Object -First 4
+      $res=@(); foreach($p in $pick){ $x=Install-One $p.FullName $Name; if($x){$res+=$x} }
+      $res
+    } else {
+      Say "Unsupported URL type: $Url" "Yellow" "WARN"; @()
+    }
+  } catch { Say ("Install-FromUrl error: "+$_.Exception.Message) "Red" "ERROR"; @() }
+}
+
+function FaceMap {
+  $map=@{}; $reg="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+  try {
+    (Get-ItemProperty $reg -ErrorAction SilentlyContinue).PSObject.Properties |
+      Where-Object { $_.Name -and $_.Name -notmatch '^PS' -and $_.Value } |
+      ForEach-Object { $map[($_.Name -replace ' \(TrueType\)$','' -replace ' \(OpenType\)$','')] = $_.Value }
+  } catch { Log ("FaceMap error: " + $_.Exception.Message) "WARN" }
+  $map
+}
+
+function CurFonts {
+  try {
+    $reg="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    (Get-ItemProperty $reg -ErrorAction SilentlyContinue).PSObject.Properties |
+      Where-Object { $_.Name -and $_.Name -notmatch '^PS' -and $_.Value } |
+      ForEach-Object { $_.Name -replace ' \(TrueType\)$','' -replace ' \(OpenType\)$','' } |
+      Sort-Object -Unique
+  } catch { @() }
+}
+
+function InvHash {
+  try {
+    $reg="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    $rows=@()
+    (Get-ItemProperty $reg -ErrorAction SilentlyContinue).PSObject.Properties |
+      Where-Object { $_.Name -and $_.Name -notmatch '^PS' -and $_.Value } |
+      ForEach-Object {
+        $f=Join-Path $FontsDir $_.Value; $s=0; if(Test-Path $f){$s=(Get-Item $f).Length}
+        $rows+=("$($_.Name)|$($_.Value)|$s")
+      }
+    $bytes=[Text.Encoding]::UTF8.GetBytes((($rows|Sort-Object) -join "`n"))
+    ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-','')
+  } catch { "NA" }
+}
+
+function FBHash {
+  try {
+    $bases=@(
+      "Segoe UI","Segoe UI Variable","Segoe UI Symbol","Segoe UI Emoji",
+      "Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas",
+      "Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2"
+    )
+    $rows=@()
+    foreach($root in @('HKLM','HKCU')){
+      $sys="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
+      $sub="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
+      foreach($b in $bases){
+        $v=(Get-ItemProperty -Path $sys -Name $b -ErrorAction SilentlyContinue).$b
+        if($v){$rows+=("SYS[$root]:$b="+($v -join ';'))}
+      }
+      foreach($n in @("Segoe UI","Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2","Arial","Times New Roman","Courier New","Segoe UI Symbol","Cambria Math","Segoe UI Emoji")){
+        $vv=(Get-ItemProperty -Path $sub -Name $n -ErrorAction SilentlyContinue).$n
+        if($vv){$rows+=("SUB[$root]:$n=$vv")}
       }
     }
-    Sha32 ($collect|Sort-Object)
-  }catch{"NA"}
+    $bytes=[Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
+    ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-','')
+  } catch { "NA" }
 }
 
-# ---------- Download & install ----------
-function Download-IfNeeded([string]$outFile,[string[]]$urls){
-  if(Test-Path $outFile){ return $true }
-  $tmp = Join-Path $env:TEMP ([IO.Path]::GetFileName($outFile))
-  foreach($u in $urls){
-    Log "INFO" ("Download attempt: {0}" -f $u)
-    try{
-      Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $tmp -TimeoutSec 180 -ErrorAction Stop
-      if((Get-Item $tmp).Length -gt 8192){ Copy-Item $tmp $outFile -Force; Log "OK" ("Saved: {0}" -f $outFile); return $true }
-      else { Log "WARN" "Downloaded file too small, skipping." }
-    }catch{ Log "ERROR" ("Download error: {0}" -f $_.Exception.Message) }
-  }
-  return $false
-}
-function Install-TTF([string]$display,[string]$file,[string[]]$urls){
-  $dst=Join-Path $FontsDir $file
-  if(Test-Path $dst){ Log "INFO" ("Exists: {0}" -f $file); return $false }
-  if(Download-IfNeeded $dst $urls){
-    $key="{0} (TrueType)" -f $display
-    New-ItemProperty -Path $HKLM_FONTS -Name $key -Value $file -PropertyType String -Force | Out-Null
-    Log "OK" ("Installed: {0} -> {1}" -f $display,$file); return $true
-  } else { Log "ERROR" ("Failed all URLs for: {0}" -f $display); return $false }
-}
-
-# ---------- SystemLink (EXACT set, randomized order) ----------
-function Set-SystemLinkExact {
-  param([string]$Root,[string]$Family,[string[]]$Entries)
-  Ensure-Key $Root
-  if(-not (Get-ItemProperty -Path $Root -Name $Family -ErrorAction SilentlyContinue)){
-    New-ItemProperty -Path $Root -Name $Family -Value $Entries -PropertyType MultiString -Force | Out-Null
-  } else {
-    Set-ItemProperty -Path $Root -Name $Family -Value $Entries -Force
-  }
-  Log "INFO" ("SystemLink [{0}] <= {1}" -f $Family,([string]::Join(' | ',$Entries)))
-}
-
-# ---------- Substitutes: pick different if possible ----------
-function Set-SubstituteRandom {
-  param([string]$Root,[string]$Src,[string[]]$Candidates,[string]$Fallback)
-  Ensure-Key $Root
-  $cur=""; try{ $cur=(Get-ItemProperty -Path $Root -Name $Src -ErrorAction Stop).$Src }catch{}
-  $pool = $Candidates | Where-Object { $_ -and $_ -ne $cur }
-  $pick = if($pool){ $pool | Get-Random } else { $Fallback }
-  Set-ItemProperty -Path $Root -Name $Src -Value $pick -Force
-  Log "INFO" ("Substitute({0}): {1} -> {2}" -f "FontSubstitutes",$Src,$pick)
-}
-
-# ---------- Flush Font Cache ----------
-function Flush-FontCache {
-  Log "INFO" "Flushing Windows Font Cache..."
-  $sv=@("FontCache3.0.0.0","FontCache")
-  foreach($s in $sv){ Stop-Service $s -Force -ErrorAction SilentlyContinue }
-  $paths=@("$env:LOCALAPPDATA\FontCache\*",
-           "$env:WINDIR\ServiceProfiles\LocalService\AppData\Local\FontCache\*")
-  foreach($p in $paths){ Remove-Item $p -Force -ErrorAction SilentlyContinue }
-  foreach($s in $sv){ Start-Service $s -ErrorAction SilentlyContinue }
-  Log "OK" "Font cache flushed."
-}
-
-# ---------- Font lists ----------
-$Latin=@(
-  @{ n="Inconsolata";         f="Inconsolata-Regular.ttf";      u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/inconsolata/static/Inconsolata-Regular.ttf") },
-  @{ n="Zilla Slab";          f="ZillaSlab-Regular.ttf";        u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/zillaslab/ZillaSlab-Regular.ttf") },
-  @{ n="Tinos";               f="Tinos-Regular.ttf";            u=@("https://raw.githubusercontent.com/google/fonts/main/apache/tinos/Tinos-Regular.ttf") },
-  @{ n="Spectral";            f="Spectral-Regular.ttf";         u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/spectral/Spectral-Regular.ttf") },
-  @{ n="Alegreya Sans";       f="AlegreyaSans-Regular.ttf";     u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/alegreyasans/AlegreyaSans-Regular.ttf") },
-  @{ n="Fira Sans";           f="FiraSans-Regular.ttf";         u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/firasans/FiraSans-Regular.ttf") },
-  @{ n="Barlow";              f="Barlow-Regular.ttf";           u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/barlow/Barlow-Regular.ttf") },
-  @{ n="Ubuntu";              f="Ubuntu-Regular.ttf";           u=@("https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Regular.ttf") },
-  @{ n="Ubuntu Mono";         f="UbuntuMono-Regular.ttf";       u=@("https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntumono/UbuntuMono-Regular.ttf") },
-  @{ n="Cousine";             f="Cousine-Regular.ttf";          u=@("https://raw.githubusercontent.com/google/fonts/main/apache/cousine/Cousine-Regular.ttf") },
-  @{ n="IBM Plex Mono";       f="IBMPlexMono-Regular.ttf";      u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-Regular.ttf") },
-  @{ n="Gentium Plus";        f="GentiumPlus-Regular.ttf";      u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumplus/GentiumPlus-Regular.ttf") },
-  @{ n="Gentium Book Plus";   f="GentiumBookPlus-Regular.ttf";  u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumbookplus/GentiumBookPlus-Regular.ttf") },
-  @{ n="Bebas Neue";          f="BebasNeue-Regular.ttf";        u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf") },
-  @{ n="Titillium Web";       f="TitilliumWeb-Regular.ttf";     u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/titilliumweb/TitilliumWeb-Regular.ttf") },
-  @{ n="Crimson Text";        f="CrimsonText-Regular.ttf";      u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Regular.ttf") },
-  @{ n="Libre Baskerville";   f="LibreBaskerville-Regular.ttf"; u=@("https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf") }
-)
-$Uni=@(
-  @{ n="Noto Color Emoji";   f="NotoColorEmoji.ttf";               u=@("https://raw.githubusercontent.com/googlefonts/noto-emoji/main/fonts/NotoColorEmoji.ttf") },
-  @{ n="Noto Sans Symbols2"; f="NotoSansSymbols2-Regular.ttf";     u=@("https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf","https://notofonts.github.io/symbols/fonts/NotoSansSymbols2/hinted/ttf/NotoSansSymbols2-Regular.ttf") },
-  @{ n="Noto Sans Math";     f="NotoSansMath-Regular.ttf";         u=@("https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf") },
-  @{ n="Noto Music";         f="NotoMusic-Regular.ttf";            u=@("https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoMusic/NotoMusic-Regular.ttf") }
-)
-
-# ---------- Baseline ----------
-Log "INFO" ("=== RUN {0:yyyy-MM-dd HH:mm:ss} ===" -f $StartTime)
-Log "INFO" ("OS: {0}  PS: {1}" -f ([Environment]::OSVersion.VersionString),$PSVersionTable.PSVersion)
-$beforeCount = (Get-ItemProperty $HKLM_FONTS).psobject.Properties | ?{ $_.Name -notmatch '^PS' } | Measure-Object | % Count
-$beforeInv = Get-InventoryHash
-$beforeFb  = Get-FallbackHash
-Log "INFO" ("Current fonts: {0}" -f $beforeCount)
-Log "INFO" ("Inventory Hash: {0}..." -f $beforeInv)
-Log "INFO" ("Fallback Hash : {0}..." -f $beforeFb)
-
-# ---------- Install up to 5 fonts ----------
-$maxInstall = 5; $installedNow = 0
-
-# Ưu tiên Unicode: luôn đảm bảo có Emoji + Symbols2 + (Math/Music random)
-$wantUni = @("Noto Color Emoji","Noto Sans Symbols2") + ((@("Noto Sans Math","Noto Music") | Get-Random -Count 1))
-foreach($n in $wantUni){
-  $x = $Uni | Where-Object { $_.n -eq $n } | Select-Object -First 1
-  if($x -and $installedNow -lt $maxInstall){
-    if(Install-TTF $x.n $x.f $x.u){ $installedNow++ }
+# Set SystemLink (prepend) for HKLM & HKCU
+function Prepend-Link { param([string]$Base,[string[]]$Pairs)
+  foreach($root in @('HKLM','HKCU')){
+    $key="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
+    try {
+      $cur=(Get-ItemProperty -Path $key -Name $Base -ErrorAction SilentlyContinue).$Base
+      if (-not $cur){$cur=@()}
+      $new=($Pairs + $cur) | Select-Object -Unique
+      New-ItemProperty -Path $key -Name $Base -Value $new -PropertyType MultiString -Force | Out-Null
+      Log "SystemLink [$Base] ($root) <= $($Pairs -join ' | ')"
+    } catch { Say "Prepend error $Base/$root: $($_.Exception.Message)" "Red" "ERROR" }
   }
 }
 
-# Bổ sung Latin nếu còn slot
-if($installedNow -lt $maxInstall){
-  $need = $maxInstall - $installedNow
-  foreach($x in ($Latin | Get-Random -Count $need)){
-    if(Install-TTF $x.n $x.f $x.u){ $installedNow++ }
-    if($installedNow -ge $maxInstall){ break }
+# FontSubstitutes (HKLM & HKCU)
+function Set-Sub { param([string]$From,[string]$To)
+  foreach($root in @('HKLM','HKCU')){
+    $key="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
+    try {
+      try { Set-ItemProperty -Path $key -Name $From -Value $To -ErrorAction Stop }
+      catch { New-ItemProperty -Path $key -Name $From -Value $To -PropertyType String -Force | Out-Null }
+      Say "Substitute($root): $From -> $To" "Yellow"
+    } catch { Say "Substitute error $From->$To/$root: $($_.Exception.Message)" "Red" "ERROR" }
   }
 }
 
-# ---------- Build available Unicode entries (chỉ lấy những file đang có) ----------
-$UHave=@()
-foreach($x in $Uni){
-  if(Test-Path (Join-Path $FontsDir $x.f)){ $UHave += ("{0},{1}" -f $x.f,$x.n) }
-}
-# Bắt buộc phải có emoji & symbols2 nếu có
-$UCore = $UHave | Where-Object { $_ -like "NotoColorEmoji.ttf,*" -or $_ -like "NotoSansSymbols2-Regular.ttf,*" }
-$UEtc  = $UHave | Where-Object { $_ -notin $UCore }
-# Tạo danh sách cuối: Emoji + Symbols2 + (2 mục ngẫu nhiên từ phần còn lại nếu có), rồi trộn thứ tự
-$pick = @()
-$pick += $UCore
-if($UEtc.Count -gt 0){ $pick += ($UEtc | Get-Random -Count ([Math]::Min(2,$UEtc.Count))) }
-# shuffle
-$pick = $pick | Sort-Object { Get-Random }
-
-# ---------- Apply SystemLink EXACT (randomized) ----------
-$Families=@("Segoe UI","Segoe UI Variable","Arial","Times New Roman","Calibri",
-            "Consolas","Courier New","Comic Sans MS","Impact","Microsoft Sans Serif",
-            "Segoe UI Symbol","Segoe UI Emoji")
-
-foreach($fam in $Families){
-  foreach($root in @($HKLM_LINK,$HKCU_LINK)){
-    Set-SystemLinkExact -Root $root -Family $fam -Entries $pick
-  }
+function Refresh-Fonts {
+  try { Stop-Service FontCache -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Remove-Item "$env:LOCALAPPDATA\FontCache\*" -Force -ErrorAction SilentlyContinue } catch { Log ("FontCache cleanup: "+$_.Exception.Message) "WARN" }
+  try { Start-Service FontCache -ErrorAction SilentlyContinue } catch {}
+  try {
+    Add-Type -Namespace Win32 -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,IntPtr l,uint f,uint t,out IntPtr r);'
+    [void][Win32.U]::SendMessageTimeout([IntPtr]0xffff,0x1D,[IntPtr]0,[IntPtr]0,2,1000,[ref]([IntPtr]::Zero))
+  } catch { Log ("Broadcast warn: "+$_.Exception.Message) "WARN" }
 }
 
-# ---------- Substitutes random (khác giá trị hiện tại nếu được) ----------
-# Lấy danh sách font đã cài để làm candidate
-$regNames=(Get-ItemProperty $HKLM_FONTS).psobject.Properties|?{ $_.Name -notmatch '^PS' }|% Name
-function HasFont([string]$fam){ ($regNames | Where-Object { $_ -like "$fam (TrueType)" }) -ne $null }
-
-$sans  = @("Alegreya Sans","Barlow","Ubuntu","Cousine") | Where-Object { HasFont $_ }
-$serif = @("Tinos","Zilla Slab","Spectral","Gentium Plus","Gentium Book Plus","Libre Baskerville","Crimson Text") | Where-Object { HasFont $_ }
-$mono  = @("IBM Plex Mono","Inconsolata","Ubuntu Mono","Cousine") | Where-Object { HasFont $_ }
-
-foreach($root in @($HKLM_SUBST,$HKCU_SUBST)){
-  Set-SubstituteRandom $root "Segoe UI"            $sans  "Arial"
-  Set-SubstituteRandom $root "Microsoft Sans Serif" $sans  "Arial"
-  Set-SubstituteRandom $root "Arial"               $sans  "Arial"
-  Set-SubstituteRandom $root "Times New Roman"     $serif "Times New Roman"
-  Set-SubstituteRandom $root "Cambria"             $serif "Cambria"
-  Set-SubstituteRandom $root "Consolas"            $mono  "Consolas"
-  Set-SubstituteRandom $root "Courier New"         $mono  "Courier New"
-  # Unicode roles
-  Set-SubstituteRandom $root "Segoe UI Symbol" (@("Noto Sans Symbols2")) "Noto Sans Symbols2"
-  Set-SubstituteRandom $root "Cambria Math"    (@("Noto Sans Math"))      "Noto Sans Math"
-  Set-SubstituteRandom $root "Segoe UI Emoji"  (@("Noto Color Emoji"))    "Noto Color Emoji"
-}
-
-# ---------- Flush cache ----------
-Flush-FontCache
-
-# ---------- Verify, retry rotate if fallback unchanged ----------
-$afterCount1 = (Get-ItemProperty $HKLM_FONTS).psobject.Properties | ?{ $_.Name -notmatch '^PS' } | Measure-Object | % Count
-$afterInv1 = Get-InventoryHash
-$afterFb1  = Get-FallbackHash
-
-if($afterFb1 -eq $beforeFb){
-  Log "WARN" "Fallback hash unchanged, re-randomizing order once..."
-  $pick = ($pick | Sort-Object { Get-Random })
-  foreach($fam in $Families){
-    foreach($root in @($HKLM_LINK,$HKCU_LINK)){
-      Set-SystemLinkExact -Root $root -Family $fam -Entries $pick
+function PickFirst { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
+  foreach($n in $Prefer){
+    foreach($k in $Map.Keys){
+      $ok = $Exact ? ($k -eq $n) : ($k -eq $n -or $k -like ($n+"*"))
+      if($ok){ $f=$Map[$k]; if($f -and (Test-Path (Join-Path $FontsDir $f))){ return @{Face=$k;Pair="$f,$k"} } }
     }
-  }
-  Flush-FontCache
-  $afterInv1 = Get-InventoryHash
-  $afterFb1  = Get-FallbackHash
+  } $null
 }
 
-# ---------- Results ----------
-Write-Host ""
-Log "INFO" "--- RESULTS ---"
-Log "INFO" ("Fonts count: {0} -> {1}  (Δ {2})" -f $beforeCount,$afterCount1,($afterCount1-$beforeCount))
-Log "INFO" ("Inventory:  {0} -> {1}" -f $beforeInv,$afterInv1)
-Log "INFO" ("Fallback :  {0} -> {1}" -f $beforeFb,$afterFb1)
-Log "OK"   ("Font Metrics changed?   {0}" -f ($(if($beforeInv -ne $afterInv1){"YES"}else{"NO"})))
-Log "OK"   ("Unicode Glyphs changed? {0}" -f ($(if($beforeFb  -ne $afterFb1) {"YES"}else{"NO"})))
-Log "INFO" ("Installed this run: {0} (max {1})" -f $installedNow,$maxInstall)
-Log "INFO" ("Log saved: {0}" -f $LogPath)
-# ============================================================================================
+# ---- MAIN ----
+Clear-Host
+Write-Host "==============================================================" -ForegroundColor Green
+Write-Host "  ADVANCED FONT FINGERPRINT ROTATOR v3.6 (EU/US ONLY)" -ForegroundColor Yellow
+Write-Host "==============================================================" -ForegroundColor Green
+Log ("OS: "+[Environment]::OSVersion.VersionString+"  PS: "+$PSVersionTable.PSVersion)
+
+# Baseline
+$beforeCount = (CurFonts).Count
+$beforeInv   = InvHash
+$beforeFB    = FBHash
+Say ("Current fonts: {0}" -f $beforeCount) "Cyan"
+Say ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
+Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
+
+# --- 1) INSTALL NEW FONTS until InventoryHash changes ---
+function Install-Round {
+  param([int]$Target=7)
+  $cats = @($DB.Sans,$DB.Serif,$DB.Mono,$DB.SymbolsMath,$DB.Emoji)
+  $pool=@()
+  foreach($c in $cats){ foreach($k in $c.Keys){ $pool+=,@{Name=$k;Url=$c[$k]} } }
+  $todo = $pool | Get-Random -Count ([Math]::Min($Target,$pool.Count))
+  $installed=0
+  foreach($i in $todo){ $list = Install-FromUrl -Name $i.Name -Url $i.Url; $installed += $list.Count }
+  return $installed
+}
+$tries=0; do {
+  $tries++
+  $added = Install-Round -Target (Get-Random -Minimum 6 -Maximum 10)
+  Start-Sleep 1
+  $afterInv = InvHash
+} while ($afterInv -eq $beforeInv -and $tries -lt 3)
+
+# --- 2) RANDOMIZE FALLBACKS until FallbackHash changes ---
+function Apply-RandomFallback {
+  $map = FaceMap
+
+  # chọn đích cho sans/serif/mono (EU/US)
+  $sansDest  = PickFirst -Prefer @("Inter","Open Sans","Roboto","IBM Plex Sans","DejaVu Sans","Lato","Raleway","Montserrat") -Map $map
+  $serifDest = PickFirst -Prefer @("Merriweather","Lora","Libre Baskerville","DejaVu Serif") -Map $map
+  $monoDest  = PickFirst -Prefer @("Cascadia Mono","Cascadia Code","Fira Code","JetBrains Mono","Inconsolata","DejaVu Sans Mono","IBM Plex Mono") -Map $map
+  $sym1      = PickFirst -Prefer @("XITS Math","Libertinus Math","Noto Sans Math","DejaVu Sans") -Map $map
+  $sym2      = PickFirst -Prefer @("DejaVu Sans","XITS Math","Libertinus Math","Noto Sans Math") -Map $map
+  $emojiDest = PickFirst -Prefer @("Noto Color Emoji") -Map $map -Exact
+
+  # SystemLink prepend (random số lượng và thứ tự)
+  $base = @("Segoe UI","Segoe UI Variable","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas","Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2") | Get-Random -Count 12
+  $pairs=@()
+  foreach($p in @($sansDest,$serifDest,$monoDest)) { if($p){ $pairs+=$p.Pair } }
+  if($sym1){ $pairs = ,$sym1.Pair + $pairs }
+  if($sym2){ $pairs += $sym2.Pair }
+  foreach($b in $base){ if($pairs.Count -gt 0){ Prepend-Link -Base $b -Pairs ($pairs | Get-Random -Count ([Math]::Min($pairs.Count,(Get-Random -Minimum 2 -Maximum 5)))) } }
+  if($sym1){ Prepend-Link -Base "Segoe UI Symbol" -Pairs @($sym1.Pair) }
+  if($emojiDest){ Prepend-Link -Base "Segoe UI Emoji" -Pairs @($emojiDest.Pair) }
+
+  # Substitutes (random pick từ nhiều ứng viên)
+  if($sansDest){  Set-Sub "Segoe UI" $sansDest.Face; Set-Sub "Arial" $sansDest.Face; Set-Sub "Microsoft Sans Serif" $sansDest.Face }
+  if($serifDest){ Set-Sub "Times New Roman" $serifDest.Face }
+  if($monoDest){  Set-Sub "Courier New" $monoDest.Face; Set-Sub "Consolas" $monoDest.Face }
+  if($sym1){      Set-Sub "Segoe UI Symbol" $sym1.Face; Set-Sub "Cambria Math" $sym1.Face }
+  if($emojiDest){ Set-Sub "Segoe UI Emoji" $emojiDest.Face }
+
+  Refresh-Fonts
+}
+
+$fbTries=0; $afterFB=$beforeFB
+do {
+  $fbTries++
+  Apply-RandomFallback
+  $afterFB = FBHash
+} while ($afterFB -eq $beforeFB -and $fbTries -lt 5)
+
+# --- RESULTS ---
+$afterCount = (CurFonts).Count
+Say "`n--- FONT METRICS (Registry list) ---" "Cyan"
+Say ("Count: {0} -> {1}  (Δ {2})" -f $beforeCount,$afterCount,($afterCount-$beforeCount)) "Green"
+
+Say "`n--- HASHES ---" "Cyan"
+Say ("Inventory:  {0} -> {1}" -f (Head32 $beforeInv),(Head32 $afterInv)) "White"
+Say ("Fallback :  {0} -> {1}" -f (Head32 $beforeFB),(Head32 $afterFB)) "White"
+
+$invChanged = ($beforeInv -ne $afterInv)
+$fbChanged  = ($beforeFB -ne $afterFB)
+Say ("Font Metrics changed?   " + ($(if($invChanged){"YES"}else{"NO"}))) ($(if($invChanged){"Green"}else{"Red"}))
+Say ("Unicode Glyphs changed? " + ($(if($fbChanged) {"YES"}else{"NO"}))) ($(if($fbChanged) {"Green"}else{"Red"}))
+
+try { Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+Log "Run finished."
