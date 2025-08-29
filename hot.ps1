@@ -1,8 +1,8 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.6 (EU/US ONLY • PS 5.x SAFE)
-  - Cài thêm font (Âu–Mỹ), không xoá font hệ thống
-  - Fallback thực sự: SystemLink + FontSubstitutes (HKLM + HKCU)
-  - BẮT BUỘC đổi cả InventoryHash & FallbackHash mỗi lần chạy
+  ADVANCED FONT FINGERPRINT ROTATOR v3.6.1 (EU/US ONLY • PS 5.x SAFE)
+  - Chỉ dùng font Âu–Mỹ. KHÔNG xoá font hệ thống.
+  - Random cài font + random SystemLink & FontSubstitutes (HKLM & HKCU).
+  - BẮT BUỘC đổi cả InventoryHash & FallbackHash (re-roll nhiều lần).
   - Logging: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
 
@@ -17,13 +17,13 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 $DownloadDir = Join-Path $env:USERPROFILE 'Downloads'
 if (!(Test-Path $DownloadDir)) { New-Item -ItemType Directory -Path $DownloadDir -Force | Out-Null }
 $LogFile = Join-Path $DownloadDir 'log.txt'
-Add-Content $LogFile "`n=== RUN $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+Add-Content $LogFile ("`n=== RUN {0} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 function Log { param([string]$msg,[string]$lvl="INFO")
   try { Add-Content $LogFile ("[{0}] [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$lvl,$msg) } catch {}
 }
 function Say { param([string]$m,[string]$c="Cyan",[string]$lvl="INFO")
-  Write-Host "[$(Get-Date -Format HH:mm:ss)] $m" -ForegroundColor $c
+  Write-Host ("[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $m) -ForegroundColor $c
   Log $m $lvl
 }
 function Head32 { param($s) if($s -and $s.Length -ge 32){$s.Substring(0,32)}elseif($s){$s}else{"NA"} }
@@ -74,18 +74,18 @@ function Download-File {
   param([string]$Url,[string]$OutFile,[int]$Retry=3)
   for($i=1;$i -le $Retry;$i++){
     try {
-      Log "Download attempt $i: $Url"
+      Log ("Download attempt {0}: {1}" -f $i,$Url)
       if ($PSVersionTable.PSVersion.Major -ge 7) {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -TimeoutSec 300
       } else {
         try { Start-BitsTransfer -Source $Url -Destination $OutFile -ErrorAction Stop }
         catch { Invoke-WebRequest -Uri $Url -OutFile $OutFile }
       }
-      if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { Log "Download OK: $OutFile"; return $true }
-    } catch { Log ("Download error: " + $_.Exception.Message) "ERROR" }
+      if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { Log ("Download OK: {0}" -f $OutFile); return $true }
+    } catch { Log ("Download error: {0}" -f $_.Exception.Message) "ERROR" }
     Start-Sleep -Seconds ([Math]::Min(2*$i,10))
   }
-  Log "Download failed: $Url" "ERROR"; return $false
+  Log ("Download failed: {0}" -f $Url) "ERROR"; return $false
 }
 
 function Get-FontFace { param([string]$Path)
@@ -94,7 +94,7 @@ function Get-FontFace { param([string]$Path)
     $pfc = New-Object System.Drawing.Text.PrivateFontCollection
     $pfc.AddFontFile($Path)
     if ($pfc.Families.Count -gt 0) { return $pfc.Families[0].Name }
-  } catch { Log ("Get-FontFace error: " + $_.Exception.Message) "WARN" }
+  } catch { Log ("Get-FontFace error: {0}" -f $_.Exception.Message) "WARN" }
   return [IO.Path]::GetFileNameWithoutExtension($Path)
 }
 
@@ -102,18 +102,18 @@ function Install-One { param([string]$File,[string]$Fallback="Custom")
   try {
     $fi = Get-Item $File
     $dest = Join-Path $FontsDir $fi.Name
-    if (Test-Path $dest) { Say "Exists: $($fi.Name)" "Gray"; return $null }
+    if (Test-Path $dest) { Say ("Exists: {0}" -f $fi.Name) "Gray"; return $null }
     Copy-Item $fi.FullName $dest -Force
     $ext = $fi.Extension.ToLower()
     $type = if ($ext -eq ".ttf" -or $ext -eq ".ttc") { "TrueType" } else { "OpenType" }
     $face = if ($ext -ne ".ttc") { Get-FontFace $dest } else { $Fallback }
     $reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-    $key = "$face ($type)"
+    $key = ("{0} ({1})" -f $face,$type)
     try { Set-ItemProperty -Path $reg -Name $key -Value $fi.Name -ErrorAction Stop }
     catch { New-ItemProperty -Path $reg -Name $key -Value $fi.Name -PropertyType String -Force | Out-Null }
     Say ("Installed: {0} -> {1}" -f $face,$fi.Name) "Green"
     return @{Face=$face;File=$fi.Name}
-  } catch { Say ("Install error: " + $_.Exception.Message) "Red" "ERROR"; return $null }
+  } catch { Say ("Install error: {0}" -f $_.Exception.Message) "Red" "ERROR"; return $null }
 }
 
 function Install-FromUrl { param([string]$Name,[string]$Url)
@@ -121,15 +121,16 @@ function Install-FromUrl { param([string]$Name,[string]$Url)
     $lower = $Url.ToLower()
     if ($lower.EndsWith(".ttf") -or $lower.EndsWith(".otf")) {
       $out = Join-Path $TempDir ([IO.Path]::GetFileName($Url))
-      if (!(Download-File $Url $out)) { Say "Download failed: $Name" "Red" "ERROR"; return @() }
+      if (!(Download-File $Url $out)) { Say ("Download failed: {0}" -f $Name) "Red" "ERROR"; return @() }
       $r = Install-One -File $out -Fallback $Name
       if ($r){,@($r)} else {@()}
     } elseif ($lower.EndsWith(".zip")) {
       $zip = Join-Path $TempDir "$Name.zip"
-      if (!(Download-File $Url $zip)) { Say "Download failed: $Name" "Red" "ERROR"; return @() }
+      if (!(Download-File $Url $zip)) { Say ("Download failed: {0}" -f $Name) "Red" "ERROR"; return @() }
       $ex = Join-Path $TempDir ("ex_" + $Name)
       if (Test-Path $ex) { Remove-Item $ex -Recurse -Force -ErrorAction SilentlyContinue }
-      try { Expand-Archive -Path $zip -DestinationPath $ex -Force } catch { Say ("Unzip error $Name: "+$_.Exception.Message) "Red" "ERROR"; return @() }
+      try { Expand-Archive -Path $zip -DestinationPath $ex -Force }
+      catch { Say ("Unzip error {0}: {1}" -f $Name,$_.Exception.Message) "Red" "ERROR"; return @() }
       $pick = Get-ChildItem $ex -Recurse -Include *.ttf,*.otf |
         Where-Object { $_.Name -notmatch "italic|oblique|thin|hairline|light" } |
         Sort-Object { if($_.Name -match "regular|normal"){0}elseif($_.Name -match "medium"){1}elseif($_.Name -match "semibold|demibold"){2}else{3} } |
@@ -137,9 +138,9 @@ function Install-FromUrl { param([string]$Name,[string]$Url)
       $res=@(); foreach($p in $pick){ $x=Install-One $p.FullName $Name; if($x){$res+=$x} }
       $res
     } else {
-      Say "Unsupported URL type: $Url" "Yellow" "WARN"; @()
+      Say ("Unsupported URL type: {0}" -f $Url) "Yellow" "WARN"; @()
     }
-  } catch { Say ("Install-FromUrl error: "+$_.Exception.Message) "Red" "ERROR"; @() }
+  } catch { Say ("Install-FromUrl error: {0}" -f $_.Exception.Message) "Red" "ERROR"; @() }
 }
 
 function FaceMap {
@@ -148,7 +149,7 @@ function FaceMap {
     (Get-ItemProperty $reg -ErrorAction SilentlyContinue).PSObject.Properties |
       Where-Object { $_.Name -and $_.Name -notmatch '^PS' -and $_.Value } |
       ForEach-Object { $map[($_.Name -replace ' \(TrueType\)$','' -replace ' \(OpenType\)$','')] = $_.Value }
-  } catch { Log ("FaceMap error: " + $_.Exception.Message) "WARN" }
+  } catch { Log ("FaceMap error: {0}" -f $_.Exception.Message) "WARN" }
   $map
 }
 
@@ -186,15 +187,15 @@ function FBHash {
     )
     $rows=@()
     foreach($root in @('HKLM','HKCU')){
-      $sys="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
-      $sub="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
+      $sys=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink" -f $root)
+      $sub=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
       foreach($b in $bases){
         $v=(Get-ItemProperty -Path $sys -Name $b -ErrorAction SilentlyContinue).$b
-        if($v){$rows+=("SYS[$root]:$b="+($v -join ';'))}
+        if($v){$rows+=("SYS[{0}]:{1}={2}" -f $root,$b,($v -join ';'))}
       }
       foreach($n in @("Segoe UI","Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2","Arial","Times New Roman","Courier New","Segoe UI Symbol","Cambria Math","Segoe UI Emoji")){
         $vv=(Get-ItemProperty -Path $sub -Name $n -ErrorAction SilentlyContinue).$n
-        if($vv){$rows+=("SUB[$root]:$n=$vv")}
+        if($vv){$rows+=("SUB[{0}]:{1}={2}" -f $root,$n,$vv)}
       }
     }
     $bytes=[Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
@@ -202,46 +203,56 @@ function FBHash {
   } catch { "NA" }
 }
 
-# Set SystemLink (prepend) for HKLM & HKCU
+# SystemLink HKLM+HKCU
 function Prepend-Link { param([string]$Base,[string[]]$Pairs)
   foreach($root in @('HKLM','HKCU')){
-    $key="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink"
+    $key=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink" -f $root)
     try {
       $cur=(Get-ItemProperty -Path $key -Name $Base -ErrorAction SilentlyContinue).$Base
       if (-not $cur){$cur=@()}
       $new=($Pairs + $cur) | Select-Object -Unique
       New-ItemProperty -Path $key -Name $Base -Value $new -PropertyType MultiString -Force | Out-Null
-      Log "SystemLink [$Base] ($root) <= $($Pairs -join ' | ')"
-    } catch { Say "Prepend error $Base/$root: $($_.Exception.Message)" "Red" "ERROR" }
+      Log ("SystemLink [{0}] ({1}) <= {2}" -f $Base,$root,($Pairs -join ' | '))
+    } catch {
+      Say ("Prepend error {0}/{1}: {2}" -f $Base,$root,$_.Exception.Message) "Red" "ERROR"
+    }
   }
 }
 
-# FontSubstitutes (HKLM & HKCU)
+# FontSubstitutes HKLM+HKCU
 function Set-Sub { param([string]$From,[string]$To)
   foreach($root in @('HKLM','HKCU')){
-    $key="$root`:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
+    $key=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
     try {
       try { Set-ItemProperty -Path $key -Name $From -Value $To -ErrorAction Stop }
       catch { New-ItemProperty -Path $key -Name $From -Value $To -PropertyType String -Force | Out-Null }
-      Say "Substitute($root): $From -> $To" "Yellow"
-    } catch { Say "Substitute error $From->$To/$root: $($_.Exception.Message)" "Red" "ERROR" }
+      Say ("Substitute({0}): {1} -> {2}" -f $root,$From,$To) "Yellow"
+    } catch {
+      Say ("Substitute error {0}->{1}/{2}: {3}" -f $From,$To,$root,$_.Exception.Message) "Red" "ERROR"
+    }
   }
 }
 
 function Refresh-Fonts {
-  try { Stop-Service FontCache -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Remove-Item "$env:LOCALAPPDATA\FontCache\*" -Force -ErrorAction SilentlyContinue } catch { Log ("FontCache cleanup: "+$_.Exception.Message) "WARN" }
+  try { Stop-Service FontCache -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Remove-Item "$env:LOCALAPPDATA\FontCache\*" -Force -ErrorAction SilentlyContinue } catch { Log ("FontCache cleanup: {0}" -f $_.Exception.Message) "WARN" }
   try { Start-Service FontCache -ErrorAction SilentlyContinue } catch {}
   try {
     Add-Type -Namespace Win32 -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,IntPtr l,uint f,uint t,out IntPtr r);'
     [void][Win32.U]::SendMessageTimeout([IntPtr]0xffff,0x1D,[IntPtr]0,[IntPtr]0,2,1000,[ref]([IntPtr]::Zero))
-  } catch { Log ("Broadcast warn: "+$_.Exception.Message) "WARN" }
+  } catch { Log ("Broadcast warn: {0}" -f $_.Exception.Message) "WARN" }
 }
 
 function PickFirst { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
   foreach($n in $Prefer){
     foreach($k in $Map.Keys){
-      $ok = $Exact ? ($k -eq $n) : ($k -eq $n -or $k -like ($n+"*"))
-      if($ok){ $f=$Map[$k]; if($f -and (Test-Path (Join-Path $FontsDir $f))){ return @{Face=$k;Pair="$f,$k"} } }
+      $ok = $false
+      if ($Exact) { if ($k -eq $n) { $ok = $true } }
+      else { if (($k -eq $n) -or ($k -like ($n + "*"))) { $ok = $true } }
+      if($ok){
+        $f=$Map[$k]; if($f -and (Test-Path (Join-Path $FontsDir $f))){
+          return @{Face=$k;Pair=("{0},{1}" -f $f,$k)}
+        }
+      }
     }
   } $null
 }
@@ -249,9 +260,9 @@ function PickFirst { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
 # ---- MAIN ----
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
-Write-Host "  ADVANCED FONT FINGERPRINT ROTATOR v3.6 (EU/US ONLY)" -ForegroundColor Yellow
+Write-Host "  ADVANCED FONT FINGERPRINT ROTATOR v3.6.1 (EU/US ONLY)" -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Green
-Log ("OS: "+[Environment]::OSVersion.VersionString+"  PS: "+$PSVersionTable.PSVersion)
+Log ("OS: {0}  PS: {1}" -f [Environment]::OSVersion.VersionString, $PSVersionTable.PSVersion)
 
 # Baseline
 $beforeCount = (CurFonts).Count
@@ -272,9 +283,10 @@ function Install-Round {
   foreach($i in $todo){ $list = Install-FromUrl -Name $i.Name -Url $i.Url; $installed += $list.Count }
   return $installed
 }
-$tries=0; do {
+$tries=0; $afterInv=$beforeInv
+do {
   $tries++
-  $added = Install-Round -Target (Get-Random -Minimum 6 -Maximum 10)
+  [void](Install-Round -Target (Get-Random -Minimum 6 -Maximum 10))
   Start-Sleep 1
   $afterInv = InvHash
 } while ($afterInv -eq $beforeInv -and $tries -lt 3)
@@ -283,7 +295,6 @@ $tries=0; do {
 function Apply-RandomFallback {
   $map = FaceMap
 
-  # chọn đích cho sans/serif/mono (EU/US)
   $sansDest  = PickFirst -Prefer @("Inter","Open Sans","Roboto","IBM Plex Sans","DejaVu Sans","Lato","Raleway","Montserrat") -Map $map
   $serifDest = PickFirst -Prefer @("Merriweather","Lora","Libre Baskerville","DejaVu Serif") -Map $map
   $monoDest  = PickFirst -Prefer @("Cascadia Mono","Cascadia Code","Fira Code","JetBrains Mono","Inconsolata","DejaVu Sans Mono","IBM Plex Mono") -Map $map
@@ -291,17 +302,20 @@ function Apply-RandomFallback {
   $sym2      = PickFirst -Prefer @("DejaVu Sans","XITS Math","Libertinus Math","Noto Sans Math") -Map $map
   $emojiDest = PickFirst -Prefer @("Noto Color Emoji") -Map $map -Exact
 
-  # SystemLink prepend (random số lượng và thứ tự)
   $base = @("Segoe UI","Segoe UI Variable","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas","Microsoft Sans Serif","Tahoma","MS Shell Dlg","MS Shell Dlg 2") | Get-Random -Count 12
   $pairs=@()
   foreach($p in @($sansDest,$serifDest,$monoDest)) { if($p){ $pairs+=$p.Pair } }
   if($sym1){ $pairs = ,$sym1.Pair + $pairs }
   if($sym2){ $pairs += $sym2.Pair }
-  foreach($b in $base){ if($pairs.Count -gt 0){ Prepend-Link -Base $b -Pairs ($pairs | Get-Random -Count ([Math]::Min($pairs.Count,(Get-Random -Minimum 2 -Maximum 5)))) } }
+  foreach($b in $base){
+    if($pairs.Count -gt 0){
+      $take = Get-Random -Minimum 2 -Maximum ([Math]::Min(5,$pairs.Count)+1)
+      Prepend-Link -Base $b -Pairs ($pairs | Get-Random -Count $take)
+    }
+  }
   if($sym1){ Prepend-Link -Base "Segoe UI Symbol" -Pairs @($sym1.Pair) }
   if($emojiDest){ Prepend-Link -Base "Segoe UI Emoji" -Pairs @($emojiDest.Pair) }
 
-  # Substitutes (random pick từ nhiều ứng viên)
   if($sansDest){  Set-Sub "Segoe UI" $sansDest.Face; Set-Sub "Arial" $sansDest.Face; Set-Sub "Microsoft Sans Serif" $sansDest.Face }
   if($serifDest){ Set-Sub "Times New Roman" $serifDest.Face }
   if($monoDest){  Set-Sub "Courier New" $monoDest.Face; Set-Sub "Consolas" $monoDest.Face }
@@ -316,7 +330,7 @@ do {
   $fbTries++
   Apply-RandomFallback
   $afterFB = FBHash
-} while ($afterFB -eq $beforeFB -and $fbTries -lt 5)
+} while ($afterFB -eq $beforeFB -and $fbTries -lt 7)
 
 # --- RESULTS ---
 $afterCount = (CurFonts).Count
