@@ -1,19 +1,16 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.7.0 (EU/US ONLY • PS 5.x SAFE)
-  - Mục tiêu bản 3.7: Tăng độ biến thiên "Unicode Glyphs" fingerprint
+  ADVANCED FONT FINGERPRINT ROTATOR v3.7.1 (EU/US ONLY • PS 5.x SAFE)
+  - Mục tiêu: tăng biến thiên "Unicode Glyphs" fingerprint
     + Ưu tiên/chen nguồn glyph Math/Symbols/Emoji/Mono/Serif vào fallback chain
-    + (Tuỳ chọn) Sửa default fonts của Chrome/Edge theo face đã chọn
-  - KHÔNG can thiệp spoof tên font dò phổ biến (Font Metrics) trong bản này
-  - Chỉ dùng font Âu–Mỹ. KHÔNG xoá font hệ thống.
-  - Random cài font + random SystemLink & FontSubstitutes (HKLM & HKCU).
-  - BẮT BUỘC đổi cả InventoryHash & FallbackHash (re-roll nhiều lần).
-  - Logging: %USERPROFILE%\Downloads\log.txt
+    + (Tuỳ chọn) Sửa default fonts của Chrome/Edge theo faces đã chọn
+  - KHÔNG spoof tên font để đổi phần "Font Metrics" trong bản này
+  - KHÔNG xoá font hệ thống. Chỉ dùng font Âu–Mỹ.
 =================================================================== #>
 
 param(
-  [switch]$ChromiumFonts = $false,      # Bật vá default fonts Chrome/Edge
-  [string]$ChromeProfile = "Default",   # Tên profile trình duyệt (thư mục)
-  [string]$EdgeProfile   = "Default"    # Tên profile trình duyệt (thư mục)
+  [switch]$ChromiumFonts = $false,
+  [string]$ChromeProfile = "Default",
+  [string]$EdgeProfile   = "Default"
 )
 
 # ---- Admin check ----
@@ -23,7 +20,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.7.0"
+$Version = "3.7.1"
 
 # ---- Logging ----
 $DownloadDir = Join-Path $env:USERPROFILE 'Downloads'
@@ -110,7 +107,7 @@ function Get-FontFace { param([string]$Path)
   return [IO.Path]::GetFileNameWithoutExtension($Path)
 }
 
-function Install-One { param([string]$File,[string]$Fallback="Custom") }
+function Install-One { param([string]$File,[string]$Fallback="Custom")
   try {
     $fi = Get-Item $File
     $dest = Join-Path $FontsDir $fi.Name
@@ -128,7 +125,7 @@ function Install-One { param([string]$File,[string]$Fallback="Custom") }
   } catch { Say ("Install error: {0}" -f $_.Exception.Message) "Red" "ERROR"; return $null }
 }
 
-function Install-FromUrl { param([string]$Name,[string]$Url) }
+function Install-FromUrl { param([string]$Name,[string]$Url)
   try {
     $lower = $Url.ToLower()
     if ($lower.EndsWith(".ttf") -or $lower.EndsWith(".otf")) {
@@ -266,10 +263,11 @@ function PickFirst { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
         }
       }
     }
-  } $null
+  }
+  $null
 }
 
-# ---- (NEW in 3.7) Chromium default fonts patch ----
+# ---- Chromium default fonts patch ----
 function Is-ProcRunning { param([string]$Name) try { (Get-Process -Name $Name -ErrorAction SilentlyContinue) -ne $null } catch { $false } }
 function Patch-ChromiumFonts {
   param(
@@ -323,7 +321,7 @@ Say ("Current fonts: {0}" -f $beforeCount) "Cyan"
 Say ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
 Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 
-# --- 1) INSTALL NEW FONTS until InventoryHash changes (giữ nguyên cơ chế 3.6.1) ---
+# --- 1) INSTALL NEW FONTS until InventoryHash changes ---
 function Install-Round { param([int]$Target=7)
   $cats = @($DB.Sans,$DB.Serif,$DB.Mono,$DB.SymbolsMath,$DB.Emoji)
   $pool=@()
@@ -341,7 +339,7 @@ do {
   $afterInv = InvHash
 } while ($afterInv -eq $beforeInv -and $tries -lt 3)
 
-# --- 2) RANDOMIZE FALLBACKS (Unicode Glyphs) until FallbackHash changes — ENHANCED in 3.7 ---
+# --- 2) RANDOMIZE FALLBACKS (Unicode Glyphs) until FallbackHash changes ---
 function Apply-RandomFallback {
   $map = FaceMap
 
@@ -357,7 +355,7 @@ function Apply-RandomFallback {
   # pairs tổng hợp
   $pairs=@()
   foreach($p in @($sansDest,$serifDest,$monoDest)) { if($p){ $pairs+=$p.Pair } }
-  if($sym1){ $pairs = ,$sym1.Pair + $pairs }   # ép Math/Symbols đứng đầu để đổi nguồn glyph cho các ký tự đặc biệt
+  if($sym1){ $pairs = ,$sym1.Pair + $pairs }
   if($sym2){ $pairs += $sym2.Pair }
   foreach($b in $base){
     if($pairs.Count -gt 0){
@@ -368,14 +366,13 @@ function Apply-RandomFallback {
   if($sym1){ Prepend-Link -Base "Segoe UI Symbol" -Pairs @($sym1.Pair) }
   if($emojiDest){ Prepend-Link -Base "Segoe UI Emoji" -Pairs @($emojiDest.Pair) }
 
-  # Substitutes để ảnh hưởng generic families
   if($sansDest){  Set-Sub "Segoe UI" $sansDest.Face; Set-Sub "Arial" $sansDest.Face; Set-Sub "Microsoft Sans Serif" $sansDest.Face }
   if($serifDest){ Set-Sub "Times New Roman" $serifDest.Face; Set-Sub "Cambria" $serifDest.Face }
   if($monoDest){  Set-Sub "Courier New" $monoDest.Face; Set-Sub "Consolas" $monoDest.Face }
   if($sym1){      Set-Sub "Segoe UI Symbol" $sym1.Face; Set-Sub "Cambria Math" $sym1.Face }
   if($emojiDest){ Set-Sub "Segoe UI Emoji" $emojiDest.Face }
 
-  # (NEW 3.7) Force-prepend coverage để đổi nguồn glyph rõ rệt trên base families
+  # Force-prepend coverage để đổi nguồn glyph rõ rệt
   if($sym1 -and $monoDest){ Prepend-Link -Base "Arial"           -Pairs @($sym1.Pair,$monoDest.Pair) }
   if($serifDest -and $sym1){ Prepend-Link -Base "Times New Roman" -Pairs @($serifDest.Pair,$sym1.Pair) }
   if($monoDest -and $sym1){  Prepend-Link -Base "Courier New"     -Pairs @($monoDest.Pair,$sym1.Pair) }
@@ -386,10 +383,8 @@ function Apply-RandomFallback {
 
   Refresh-Fonts
 
-  # Trả về faces đã chọn để (tuỳ chọn) patch Chromium
   return @{
-    Sans  = $sansDest; Serif=$serifDest; Mono=$monoDest;
-    Sym   = $sym1;     Emoji=$emojiDest
+    Sans=$sansDest; Serif=$serifDest; Mono=$monoDest; Sym=$sym1; Emoji=$emojiDest
   }
 }
 
@@ -400,7 +395,7 @@ do {
   $afterFB = FBHash
 } while ($afterFB -eq $beforeFB -and $fbTries -lt 7)
 
-# --- (Tuỳ chọn) Patch Chrome/Edge default fonts theo faces cuối cùng ---
+# --- (Tuỳ chọn) Patch Chrome/Edge default fonts ---
 if($ChromiumFonts){
   $sansFace  = if($targets.Sans){ $targets.Sans.Face } else { "Inter" }
   $serifFace = if($targets.Serif){ $targets.Serif.Face } else { "Merriweather" }
