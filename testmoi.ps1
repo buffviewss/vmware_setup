@@ -110,7 +110,7 @@ function Get-FontFace { param([string]$Path)
   return [IO.Path]::GetFileNameWithoutExtension($Path)
 }
 
-function Install-One { param([string]$File,[string]$Fallback="Custom"])
+function Install-One { param([string]$File,[string]$Fallback="Custom") }
   try {
     $fi = Get-Item $File
     $dest = Join-Path $FontsDir $fi.Name
@@ -128,7 +128,7 @@ function Install-One { param([string]$File,[string]$Fallback="Custom"])
   } catch { Say ("Install error: {0}" -f $_.Exception.Message) "Red" "ERROR"; return $null }
 }
 
-function Install-FromUrl { param([string]$Name,[string]$Url])
+function Install-FromUrl { param([string]$Name,[string]$Url) }
   try {
     $lower = $Url.ToLower()
     if ($lower.EndsWith(".ttf") -or $lower.EndsWith(".otf")) {
