@@ -1,12 +1,13 @@
 <# ===================================================================
-   ADVANCED FONT FINGERPRINT ROTATOR v3.2 (PowerShell 5.x SAFE)
+   ADVANCED FONT FINGERPRINT ROTATOR v3.3 (PowerShell 5.x SAFE)
    - Random cài thêm font (Google/Adobe/Microsoft/JetBrains…)
-   - Ghi Registry theo Face Name (TTF/OTF; TTC fallback)
-   - Đổi FontLink/SystemLink cho:
-       Segoe UI / Segoe UI Symbol / Segoe UI Emoji
-       + Arial / Times New Roman / Courier New / Calibri / Cambria / Consolas
-     => thay Unicode glyphs cho default, sans-serif, serif, monospace (v.v.)
-   - Hash kiểm tra: InventoryHash (Name|File|Size) & FallbackChainHash
+   - Ghi Registry đúng Face Name (TTF/OTF; TTC fallback)
+   - Đổi Fallback thực sự (SystemLink + FontSubstitutes):
+       * Segoe UI / Symbol / Emoji + Arial / Times New Roman / Courier New
+         Calibri / Cambria / Consolas (SystemLink)
+       * Arial / Times New Roman / Courier New / Segoe UI Symbol /
+         Cambria Math / Segoe UI Emoji  (FontSubstitutes)
+   - Hashes: InventoryHash (Name|File|Size) + FallbackHash(SystemLink+Substitutes)
    - KHÔNG mở trình duyệt tự động. KHÔNG xoá font hệ thống.
 =================================================================== #>
 
@@ -50,12 +51,6 @@ $FontDB = @{
     "NotoSansCJKkr-Regular" = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf"
     "NotoSansCJK-OTC"       = "https://github.com/googlefonts/noto-cjk/releases/download/Sans2.004/04_NotoSansCJK-OTC.zip"
     "SourceHanSans-OTC"     = "https://github.com/adobe-fonts/source-han-sans/releases/download/2.004R/SourceHanSans.ttc"
-  };
-  Scripts = @{
-    "NotoSansArabic" = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"
-    "NotoSansHebrew" = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansHebrew/NotoSansHebrew-Regular.ttf"
-    "NotoSansThai"   = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansThai/NotoSansThai-Regular.ttf"
-    "NotoSansKR"     = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansKR/NotoSansKR-Regular.ttf"
   };
   Specialty = @{
     "FiraCode"      = "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip"
@@ -115,13 +110,19 @@ function Get-FontInventoryHash {
   } catch { return "NA" }
 }
 
-function Get-FallbackChainHash {
-  $key='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink'
+# Fallback hash = SystemLink (nhiều base families) + FontSubstitutes (mục ta đụng vào)
+function Get-FallbackHash {
+  $sysKey='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink'
+  $subKey='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
   $bases=@("Segoe UI","Segoe UI Symbol","Segoe UI Emoji","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas")
   $rows=@()
   foreach($b in $bases){
-    $v=(Get-ItemProperty -Path $key -Name $b -ErrorAction SilentlyContinue).$b
-    if ($v) { $rows+=("$b=" + ($v -join ";")) } else { $rows+=("$b=") }
+    $v=(Get-ItemProperty -Path $sysKey -Name $b -ErrorAction SilentlyContinue).$b
+    if ($v) { $rows+=("SYS:$b=" + ($v -join ";")) } else { $rows+=("SYS:$b=") }
+  }
+  foreach($name in @("Arial","Times New Roman","Courier New","Segoe UI Symbol","Cambria Math","Segoe UI Emoji")){
+    $vv=(Get-ItemProperty -Path $subKey -Name $name -ErrorAction SilentlyContinue).$name
+    if ($vv) { $rows+=("SUB:$name=$vv") } else { $rows+=("SUB:$name=") }
   }
   $bytes=[Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
   $hash=[Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
@@ -218,6 +219,15 @@ function Prepend-FontLink {
   New-ItemProperty -Path $key -Name $BaseFamily -Value $new -PropertyType MultiString -Force | Out-Null
 }
 
+function Set-FontSubstitute {
+  param([string]$From,[string]$To)
+  $key='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
+  if ([string]::IsNullOrWhiteSpace($From) -or [string]::IsNullOrWhiteSpace($To)) { return }
+  try { Set-ItemProperty -Path $key -Name $From -Value $To -ErrorAction Stop }
+  catch { New-ItemProperty -Path $key -Name $From -Value $To -PropertyType String -Force | Out-Null }
+  Write-Status ("Substitute: {0} -> {1}" -f $From,$To) "Yellow"
+}
+
 function Refresh-Fonts {
   try {
     Stop-Service FontCache -Force -ErrorAction SilentlyContinue
@@ -268,29 +278,27 @@ function Find-PairByFacePriority {
 
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
-Write-Host "   ADVANCED FONT FINGERPRINT ROTATOR v3.2 (PS 5.x SAFE)" -ForegroundColor Yellow
+Write-Host "   ADVANCED FONT FINGERPRINT ROTATOR v3.3 (PS 5.x SAFE)" -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Green
 
 # Baseline
 $beforeList   = Get-CurrentFonts
 $beforeInv    = Get-FontInventoryHash
-$beforeFall   = Get-FallbackChainHash
+$beforeFall   = Get-FallbackHash
 
 Write-Status ("Current fonts: {0}" -f $beforeList.Count) "Cyan"
 Write-Status ("Inventory Hash: {0}..." -f (Head32 $beforeInv)) "Cyan"
-Write-Status ("FallbackChain:  {0}..." -f (Head32 $beforeFall)) "Cyan"
+Write-Status ("FallbackHash : {0}..." -f (Head32 $beforeFall)) "Cyan"
 
 # 1) Random install 5..8 fonts
 $targetCount = Get-Random -Minimum 5 -Maximum 9
 Write-Host "`n[1/3] Download & install random fonts ($targetCount)..." -ForegroundColor Yellow
 $wish = Pick-RandomFonts -Count $targetCount
 foreach($item in $wish){ $null = Install-FromUrl -Name $item.Name -Url $item.Url }
-
-# ensure core packs (best-effort)
 foreach($core in @("NotoSymbols","NotoSansMath","NotoColorEmoji")){ if ($FontDB.Unicode[$core]) { $null = Install-FromUrl -Name $core -Url $FontDB.Unicode[$core] } }
 
-# 2) Configure Unicode glyph fallback (SystemLink) rộng hơn
-Write-Host "`n[2/3] Configure Unicode glyph fallback (SystemLink)..." -ForegroundColor Yellow
+# 2) Configure fallback + substitutes
+Write-Host "`n[2/3] Configure Unicode glyph override (SystemLink + Substitutes)..." -ForegroundColor Yellow
 
 # backup once
 $bk1="$TempDir\SystemLink_backup.reg"; $bk2="$TempDir\FontSub_backup.reg"
@@ -328,13 +336,32 @@ if ($nmath -ne $null) { $segSymPairs  += $nmath }
 $nemoji = Find-PairByFacePriority -FacePriority @("Noto Color Emoji") -FaceToFileMap $faceMap
 if ($nemoji -ne $null) { $segEmojiPairs += $nemoji }
 
-# Prepend cho nhiều base families: default/sans-serif/serif/monospace UI
+# Prepend SystemLink cho nhiều base families
 $baseFamilies = @("Segoe UI","Arial","Times New Roman","Courier New","Calibri","Cambria","Consolas")
-foreach($bf in $baseFamilies){
-  if ($segBasePairs.Count -gt 0){ Prepend-FontLink -BaseFamily $bf -Pairs $segBasePairs }
-}
+foreach($bf in $baseFamilies){ if ($segBasePairs.Count -gt 0){ Prepend-FontLink -BaseFamily $bf -Pairs $segBasePairs } }
 if ($segSymPairs.Count  -gt 0){ Prepend-FontLink -BaseFamily "Segoe UI Symbol" -Pairs $segSymPairs }
 if ($segEmojiPairs.Count -gt 0){ Prepend-FontLink -BaseFamily "Segoe UI Emoji"  -Pairs $segEmojiPairs }
+
+# ===== Aggressive FontSubstitutes (đổi hẳn mặt font cơ bản) =====
+# Chọn đích đã cài sẵn
+function Pick-FirstInstalled { param([string[]]$Prefer,[hashtable]$FaceMap)
+  foreach($n in $Prefer){ foreach($k in $FaceMap.Keys){ if ($k -eq $n -or $k -like ($n + "*")) { return $k } } }
+  return $null
+}
+
+$toSans   = Pick-FirstInstalled -Prefer @("Noto Sans","Inter","Open Sans","Roboto","Ubuntu","PT Sans") -FaceMap $faceMap
+$toSerif  = Pick-FirstInstalled -Prefer @("Merriweather","Lora") -FaceMap $faceMap
+$toMono   = Pick-FirstInstalled -Prefer @("Cascadia Mono","Cascadia Mono PL","Fira Code","Inconsolata","Victor Mono","JetBrains Mono") -FaceMap $faceMap
+$toSymbol = Pick-FirstInstalled -Prefer @("Noto Symbols") -FaceMap $faceMap
+$toMath   = Pick-FirstInstalled -Prefer @("Noto Sans Math") -FaceMap $faceMap
+$toEmoji  = Pick-FirstInstalled -Prefer @("Noto Color Emoji") -FaceMap $faceMap
+
+if ($toSans)   { Set-FontSubstitute -From "Arial"           -To $toSans }
+if ($toSerif)  { Set-FontSubstitute -From "Times New Roman" -To $toSerif }
+if ($toMono)   { Set-FontSubstitute -From "Courier New"     -To $toMono }
+if ($toSymbol) { Set-FontSubstitute -From "Segoe UI Symbol" -To $toSymbol }
+if ($toMath)   { Set-FontSubstitute -From "Cambria Math"    -To $toMath }
+if ($toEmoji)  { Set-FontSubstitute -From "Segoe UI Emoji"  -To $toEmoji }
 
 # refresh caches & broadcast
 Refresh-Fonts
@@ -343,14 +370,14 @@ Refresh-Fonts
 Write-Host "`n[3/3] Results & verification..." -ForegroundColor Yellow
 $afterList  = Get-CurrentFonts
 $afterInv   = Get-FontInventoryHash
-$afterFall  = Get-FallbackChainHash
+$afterFall  = Get-FallbackHash
 
 Write-Host "`n--- FONT METRICS (Registry list) ---" -ForegroundColor Cyan
 Write-Host ("Count: {0} -> {1}  (Δ {2})" -f $beforeList.Count,$afterList.Count,($afterList.Count-$beforeList.Count)) -ForegroundColor Green
 
 Write-Host "`n--- HASHES ---" -ForegroundColor Cyan
-Write-Host ("Inventory: {0} -> {1}" -f (Head32 $beforeInv), (Head32 $afterInv)) -ForegroundColor White
-Write-Host ("Fallback : {0} -> {1}" -f (Head32 $beforeFall), (Head32 $afterFall)) -ForegroundColor White
+Write-Host ("Inventory:  {0} -> {1}" -f (Head32 $beforeInv), (Head32 $afterInv)) -ForegroundColor White
+Write-Host ("Fallback :  {0} -> {1}" -f (Head32 $beforeFall), (Head32 $afterFall)) -ForegroundColor White
 
 $changedInv  = ($beforeInv -ne $afterInv)
 $changedFall = ($beforeFall -ne $afterFall)
@@ -358,6 +385,5 @@ $changedFall = ($beforeFall -ne $afterFall)
 Write-Host ("Font Metrics changed?   {0}" -f ($(if ($changedInv) {"YES"} else {"NO"}))) -ForegroundColor ($(if ($changedInv) {"Green"} else {"Red"}))
 Write-Host ("Unicode Glyphs changed? {0}" -f ($(if ($changedFall) {"YES"} else {"NO"}))) -ForegroundColor ($(if ($changedFall) {"Green"} else {"Red"}))
 
-# No auto-opening browsers (the user will check manually)
-
+# KHÔNG mở trình duyệt
 try { Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
