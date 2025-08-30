@@ -82,17 +82,29 @@ $FAMILIES = @{
 
 # Unicode boosters – lấy qua GitHub Content API (rồi tải qua CDN theo SHA)
 $UNICODE_BOOST = @(
-  @{ Owner="googlefonts"; Repo="noto-emoji"; Path="fonts";                          Pattern="^NotoColorEmoji\.ttf$";   Name="Noto Color Emoji" },
-  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansSymbols2";    Pattern="Regular\.ttf$";            Name="Noto Sans Symbols 2" },
-  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansMath";        Pattern="Regular\.ttf$";            Name="Noto Sans Math" },
-  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoMusic";           Pattern="Regular\.ttf$";            Name="Noto Music" }
+  @{ Owner="googlefonts"; Repo="noto-emoji"; Path="fonts";
+     Pattern="(?i)^NotoColorEmoji\.ttf$"; Name="Noto Color Emoji" },
+
+  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="unhinted/ttf/NotoSansMath";
+     Pattern="(?i)NotoSansMath-.*Regular\.ttf$"; Name="Noto Sans Math" },
+
+  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="unhinted/ttf/NotoMusic";
+     Pattern="(?i)NotoMusic-.*Regular\.ttf$"; Name="Noto Music" },
+
+  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="unhinted/ttf/NotoSansSymbols2";
+     Pattern="(?i)NotoSansSymbols2-.*Regular\.ttf$"; Name="Noto Sans Symbols 2" }
 )
 
 # ===================== API RESOLVERS =====================
 
 # GitHub headers
 $Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.5' }
-if($Global:GITHUB_TOKEN){ $Global:GHHeaders['Authorization'] = "token $Global:GITHUB_TOKEN" }
+if($Global:GITHUB_TOKEN){
+  $Global:GHHeaders['Authorization'] = "Bearer $Global:GITHUB_TOKEN"
+  $Global:GHHeaders['Accept'] = 'application/vnd.github+json'
+  $Global:GHHeaders['X-GitHub-Api-Version'] = '2022-11-28'
+}
+
 
 function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
   @(
@@ -103,6 +115,7 @@ function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
 
 # HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
 $__ghCache = @{}
+$__ghCache = @{}
 function Get-GitHubContentFiles {
   param(
     [string]$Owner,
@@ -110,26 +123,61 @@ function Get-GitHubContentFiles {
     [string]$Path,
     [string]$Pattern = '\.(ttf|otf)$'
   )
+
   $key = "$Owner/$Repo/$Path/$Pattern"
   if ($__ghCache.ContainsKey($key)) { return $__ghCache[$key] }
 
-  $api = "https://api.github.com/repos/$Owner/$Repo/contents/$Path"
-  try {
-    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api |
-             ConvertFrom-Json
-    $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
-    $acc = @()
-    foreach($f in $files){
-      $acc += New-GHCDNUrls $Owner $Repo $f.sha $Path $f.name
-    }
-    $urls = $acc | Select-Object -Unique
-    $__ghCache[$key] = $urls
-    return $urls
-  } catch {
-    Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"
-    return @()
+  $makeCdn = {
+    param($sha,$p,$name)
+    @(
+      "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$sha/$p/$name",
+      "https://cdn.statically.io/gh/$Owner/$Repo@$sha/$p/$name"
+    )
   }
+
+  # Thử nhiều path: giữ path gốc, rồi thử hoán đổi hinted <-> unhinted
+  $tryPaths = @($Path)
+  if ($Path -match '^hinted/')   { $tryPaths += ($Path -replace '^hinted/','unhinted/') }
+  if ($Path -match '^unhinted/') { $tryPaths += ($Path -replace '^unhinted/','hinted/') }
+  $tryPaths = $tryPaths | Select-Object -Unique
+
+  foreach($p in $tryPaths){
+    try {
+      $api = "https://api.github.com/repos/$Owner/$Repo/contents/$p"
+      $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api |
+               ConvertFrom-Json
+      $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
+      if($files){
+        $urls = @()
+        foreach($f in $files){ $urls += & $makeCdn $f.sha $p $f.name }
+        $urls = $urls | Select-Object -Unique
+        $__ghCache[$key] = $urls
+        return $urls
+      }
+    } catch {
+      Log ("GitHub API error ($Owner/$Repo/$p): $($_.Exception.Message)") "WARN"
+    }
+  }
+
+  # Fallback cuối: thử RAW qua nhánh main nếu vẫn rỗng
+  try {
+    $fileHint = switch -regex ($Path) {
+      'NotoSansMath'     { 'NotoSansMath-Regular.ttf' }
+      'NotoMusic'        { 'NotoMusic-Regular.ttf' }
+      'NotoSansSymbols2' { 'NotoSansSymbols2-Regular.ttf' }
+      default            { $null }
+    }
+    if($fileHint){
+      $p2 = ($tryPaths | Where-Object {$_ -match 'unhinted/'} | Select-Object -First 1)
+      if(-not $p2){ $p2 = $Path }
+      $raw = "https://raw.githubusercontent.com/$Owner/$Repo/refs/heads/main/$p2/$fileHint"
+      $__ghCache[$key] = @($raw)
+      return $__ghCache[$key]
+    }
+  } catch {}
+  return @()
 }
+
 
 # Fontsource Data API
 function Get-FontFromFontsourceAPI {
