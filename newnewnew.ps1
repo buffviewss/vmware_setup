@@ -115,7 +115,6 @@ function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
 
 # HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
 $__ghCache = @{}
-$__ghCache = @{}
 function Get-GitHubContentFiles {
   param(
     [string]$Owner,
@@ -301,8 +300,8 @@ function Resolve-FontTTF {
   $urls=@()
   $urls += Get-FontFromFontsourceAPI $Family
   if(-not $urls){ if(Init-GFAPI $GoogleApiKey){ $urls += Get-FontFromGFAPI $Family } }
-  if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -Host "fonts.googleapis.com" }
-  if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -Host "fonts.bunny.net" }
+  if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -CssHost "fonts.googleapis.com" }
+  if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -CssHost "fonts.bunny.net" }
   if(-not $urls){ $urls += Get-FontFromFontlibraryAPI $Family }
   if(-not $urls){
     $folder = ($Family.ToLower() -replace '[^a-z0-9]','')
