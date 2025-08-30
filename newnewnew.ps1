@@ -28,8 +28,8 @@ param(
 )
 
 # ==== INLINE TOKENS (SỬA 2 DÒNG NÀY LÀ XONG) ====
-$INLINE_GF_API_KEY   = ""   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
-$INLINE_GITHUB_TOKEN = ""   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
+$INLINE_GF_API_KEY   = "AIzaSyB7LR94DdSCSLLn3E0fV3wK7IP_ZDX4wtk"   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
+$INLINE_GITHUB_TOKEN = "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"   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
 
 # Áp dụng ưu tiên: param -> INLINE -> env
 if ([string]::IsNullOrWhiteSpace($GoogleApiKey) -and -not [string]::IsNullOrWhiteSpace($INLINE_GF_API_KEY)) {
