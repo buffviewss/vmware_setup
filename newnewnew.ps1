@@ -1,12 +1,16 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.13.2-API-GFKEY
+  ADVANCED FONT FINGERPRINT ROTATOR v3.13.3-API-GFKEY-TOKENINLINE
   - Chỉ tải font qua API uy tín: Fontsource Data API, Google Web Fonts
     Developer API (có key), CSS2 (Google/Bunny), FontLibrary, GitHub Content
     API (fetch qua jsDelivr/Statically theo SHA). Không dùng link release/raw.
   - Mỗi lần chạy cố gắng đổi cả Inventory (Font Metrics) & Unicode Glyphs.
   - Mặc định KHÔNG gỡ font đã cài (KeepGrowth = $true). Có thể tắt để dọn.
-  - Có patch default fonts Chrome/Edge (standard/serif/sans/fixed/cursive/fantasy).
+  - Patch default fonts Chrome/Edge (standard/serif/sans/fixed/cursive/fantasy).
   - Log: %USERPROFILE%\Downloads\log.txt
+
+  *** Điền token tại đây (chỉ cần sửa chuỗi, phần còn lại tự nhận): ***
+    - Google Fonts API key:   $INLINE_GF_API_KEY
+    - GitHub Personal Token:  $INLINE_GITHUB_TOKEN  (tùy chọn, tăng limit)
 =================================================================== #>
 
 param(
@@ -20,8 +24,23 @@ param(
   [string]$ChromeProfile = "Default",
   [string]$EdgeProfile   = "Default",
   [int]$MaxRounds = 3,
-  [string]$GoogleApiKey = $env:GF_API_KEY   # Web Fonts Developer API key (đặt qua env để khỏi lộ)
+  [string]$GoogleApiKey = $env:GF_API_KEY   # có thể truyền qua tham số; nếu trống sẽ dùng INLINE bên dưới
 )
+
+# ==== INLINE TOKENS (SỬA 2 DÒNG NÀY LÀ XONG) ====
+$INLINE_GF_API_KEY   = ""   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
+$INLINE_GITHUB_TOKEN = ""   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
+
+# Áp dụng ưu tiên: param -> INLINE -> env
+if ([string]::IsNullOrWhiteSpace($GoogleApiKey) -and -not [string]::IsNullOrWhiteSpace($INLINE_GF_API_KEY)) {
+  $GoogleApiKey = $INLINE_GF_API_KEY
+}
+# GitHub token dùng biến global như cũ, nhưng ưu tiên INLINE
+$Global:GITHUB_TOKEN = if(-not [string]::IsNullOrWhiteSpace($INLINE_GITHUB_TOKEN)){
+  $INLINE_GITHUB_TOKEN
+} elseif(-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)){
+  $env:GITHUB_TOKEN
+} else { $null }
 
 # ---- Admin check ----
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -30,7 +49,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.13.2-API-GFKEY"
+$Version = "3.13.3-API-GFKEY-TOKENINLINE"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -77,9 +96,8 @@ $UNICODE_BOOST = @(
 
 # ===================== API RESOLVERS =====================
 
-# GitHub headers (tuỳ chọn token để vượt rate-limit)
-$Global:GITHUB_TOKEN = $env:GITHUB_TOKEN
-$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.2' }
+# GitHub headers (token optional để vượt rate-limit)
+$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.3' }
 if($Global:GITHUB_TOKEN){ $Global:GHHeaders['Authorization'] = "token $Global:GITHUB_TOKEN" }
 
 function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
@@ -119,7 +137,7 @@ function Get-FontFromFontsourceAPI {
   if($alias.ContainsKey($pkg)){ $pkg = $alias[$pkg] }
   $api = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg@latest"
   try {
-    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.2' } $api | ConvertFrom-Json
+    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.3' } $api | ConvertFrom-Json
   } catch { Log ("Fontsource API ($pkg) error: $($_.Exception.Message)") "WARN"; return @() }
 
   $all=@()
@@ -550,8 +568,8 @@ for($round=1; $round -le $MaxRounds; $round++){
     $mf = if($mono){$mono.Face}else{"Consolas"}
     $cf = if($cursive){$cursive.Face}else{"Comic Sans MS"}
     $ff = if($fantasy){$fantasy.Face}else{"Impact"}
-    $chrome = Join-Path $env:LOCALAPPDATA ("Google\Chrome\User Data\{0}\Preferences" -f $ChromeProfile)
-    $edge   = Join-Path $env:LOCALAPPDATA ("Microsoft\Edge\User Data\{0}\Preferences" -f $EdgeProfile)
+    $chrome = Join-Path $env:LOCALAPPDATA ("Google\Chrome/User Data/{0}/Preferences" -f $ChromeProfile)
+    $edge   = Join-Path $env:LOCALAPPDATA ("Microsoft/Edge/User Data/{0}/Preferences" -f $EdgeProfile)
     Patch-ChromiumFonts -PrefsPath $chrome -Sans $sf -Serif $rf -Mono $mf -Cursive $cf -Fantasy $ff
     Patch-ChromiumFonts -PrefsPath $edge   -Sans $sf -Serif $rf -Mono $mf -Cursive $cf -Fantasy $ff
   } else { Say "NoChromiumFonts: SKIP patch Chrome/Edge." "Yellow" }
