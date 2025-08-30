@@ -1,10 +1,11 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.13-API-ONLY
-  - Chỉ tải qua API: Google Fonts CSS2, Fontsource Data API, GitHub Content API
-  - Không dùng link phát hành (release) / hard link
-  - Mỗi lần chạy: đổi Inventory (Font Metrics) + Unicode Glyphs
-  - Patch default fonts Chrome/Edge (tùy chọn)
-  Log: %USERPROFILE%\Downloads\log.txt
+  ADVANCED FONT FINGERPRINT ROTATOR v3.13.1-API-ONLY-HOTFIX
+  - Chỉ tải font qua API uy tín: Google Fonts CSS2, Fontsource Data API,
+    GitHub Content API (tải qua jsDelivr theo SHA). Không dùng link release/raw.
+  - Mỗi lần chạy cố gắng đổi cả Inventory (Font Metrics) & Unicode Glyphs.
+  - Mặc định KHÔNG gỡ font đã cài (KeepGrowth = $true).
+  - Có patch default fonts Chrome/Edge (tùy chọn).
+  - Log: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
 
 param(
@@ -12,7 +13,7 @@ param(
   [int]$InstallMax   = 18,
   [int]$UninstallMin = 6,
   [int]$UninstallMax = 10,
-  [switch]$KeepGrowth = $true,     # Mặc định KHÔNG gỡ font đã cài
+  [switch]$KeepGrowth = $true,     # giữ nguyên font cũ
   [switch]$NoChromiumFonts = $false,
   [switch]$NoForceClose    = $false,
   [string]$ChromeProfile = "Default",
@@ -27,7 +28,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.13-API-ONLY"
+$Version = "3.13.1-API-ONLY-HOTFIX"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -51,7 +52,7 @@ $StateKey = "HKLM:\SOFTWARE\FontRotator"
 if (!(Test-Path $TempDir)) { New-Item -ItemType Directory -Path $TempDir -Force | Out-Null }
 if (!(Test-Path $StateKey)) { New-Item -Path $StateKey -Force | Out-Null }
 
-# ---- Pools
+# ---- Pools ----
 $FAMILIES = @{
   Sans  = @("Inter","Open Sans","Roboto","Noto Sans","Work Sans","Manrope","Poppins",
             "DM Sans","Karla","Rubik","Cabin","Asap","Lexend","Heebo","Outfit",
@@ -64,7 +65,7 @@ $FAMILIES = @{
             "Iosevka","Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
 }
 
-# Unicode boosters – lấy qua GitHub Content API, KHÔNG raw/release
+# Unicode boosters – lấy qua GitHub Content API (sau đó tải qua jsDelivr theo SHA)
 $UNICODE_BOOST = @(
   @{ Owner="googlefonts"; Repo="noto-emoji"; Path="fonts"; Pattern="^NotoColorEmoji\.ttf$";   Name="Noto Color Emoji" },
   @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansSymbols2"; Pattern="Regular\.ttf$"; Name="Noto Sans Symbols 2" },
@@ -74,47 +75,47 @@ $UNICODE_BOOST = @(
 
 # ===================== API RESOLVERS =====================
 
-# Helper: JSDelivr Data API – liệt kê file của @fontsource/<pkg>
+# Fontsource Data API (prefer exact @latest, broaden match)
 function Get-FontFromFontsourceAPI {
   param([string]$Family)
-  $pkg = ( $Family.ToLower() -replace '[\s_]+','-' )
-  # Một số alias phổ biến
-  $map = @{
+  $pkg = ($Family.ToLower() -replace '[\s_]+','-')
+  $alias = @{
     "plus-jakarta-sans"="plus-jakarta-sans"; "source-serif-4"="source-serif-4"; "old-standard-tt"="old-standard-tt"
     "eb-garamond"="eb-garamond"; "ibm-plex-sans"="ibm-plex-sans"; "ibm-plex-mono"="ibm-plex-mono"
     "pt-sans"="pt-sans"; "fira-sans"="fira-sans"; "source-sans-3"="source-sans-3"; "red-hat-mono"="red-hat-mono"
     "playfair-display"="playfair-display"; "gentium-book-plus"="gentium-book-plus"; "jetbrains-mono"="jetbrains-mono"
   }
-  if($map.ContainsKey($pkg)){ $pkg = $map[$pkg] }
+  if($alias.ContainsKey($pkg)){ $pkg = $alias[$pkg] }
 
-  $api = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg"
+  $api = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg@latest"
   try {
-    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13' } $api | ConvertFrom-Json
-  } catch {
-    Log ("Fontsource Data API error ($Family/$pkg): $($_.Exception.Message)") "WARN"; return @()
-  }
+    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.1' } $api | ConvertFrom-Json
+  } catch { Log ("Fontsource API ($pkg) error: $($_.Exception.Message)") "WARN"; return @() }
 
   $all=@()
   function Walk($node, $prefix){
     foreach($f in $node.files){
       $p = if($prefix){ "$prefix/$($f.name)" } else { $f.name }
-      if($f.type -eq "file"){ $script:all += $p }
-      elseif($f.type -eq "directory"){ Walk $f $p }
+      if($f.type -eq "file"){ $script:all += $p } elseif($f.type -eq "directory"){ Walk $f $p }
     }
   }
   Walk $json ""
 
-  # Ưu tiên latin 400 normal, sau đó 400 normal bất kỳ
-  $choice = $all | Where-Object { $_ -match '^files/.+-latin-400-normal\.ttf$' } | Select-Object -First 1
-  if(-not $choice){ $choice = $all | Where-Object { $_ -match '^files/.+-400-normal\.ttf$' } | Select-Object -First 1 }
-  if(-not $choice){ $choice = $all | Where-Object { $_ -match '^files/.+\.ttf$' } | Select-Object -First 1 }
-  if($choice){
-    ,@("https://cdn.jsdelivr.net/npm/@fontsource/$pkg/$choice",
-       "https://unpkg.com/@fontsource/$pkg/$choice")
-  } else { @() }
+  $pick = $all | Where-Object { $_ -match '^files/.+-latin-400-normal\.ttf$' } | Select-Object -First 1
+  if(-not $pick){ $pick = $all | Where-Object { $_ -match '^files/.+-all-400-normal\.ttf$' } | Select-Object -First 1 }
+  if(-not $pick){ $pick = $all | Where-Object { $_ -match '^files/.+-400-normal\.ttf$' } | Select-Object -First 1 }
+  if(-not $pick){ $pick = $all | Where-Object { $_ -match '^files/.+\.ttf$' } | Select-Object -First 1 }
+
+  if($pick){
+    return @(
+      "https://cdn.jsdelivr.net/npm/@fontsource/$pkg/$pick",
+      "https://unpkg.com/@fontsource/$pkg/$pick"
+    )
+  }
+  @()
 }
 
-# Google Fonts CSS2 (ép trả TTF bằng UA Android 4.4)
+# Google Fonts CSS2 (try to fetch TTF/OTF; spoof Android UA)
 function Get-FontFromGoogleCSS {
   param([string]$Family,[int[]]$Weights=@(400,500,300))
   $ua = 'Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/KRT16M) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36'
@@ -125,8 +126,11 @@ function Get-FontFromGoogleCSS {
       $cssUrl = "https://fonts.googleapis.com/css2?family=$($famQuery):$fmt&display=swap"
       try {
         $css = Invoke-WebRequest -Headers $headers -UseBasicParsing -TimeoutSec 60 $cssUrl
-        $ttf = ([regex]'url\(([^)]+\.ttf)\)').Matches($css.Content) | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
-        $uniq = $ttf | Select-Object -Unique
+        $urls = @()
+        $urls += ([regex]'url\(([^)]+\.ttf)\)').Matches($css.Content)  | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
+        $urls += ([regex]'url\(([^)]+\.otf)\)').Matches($css.Content)  | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
+        $truetype = ([regex]'url\(([^)]+)\)\s*format\("truetype"\)').Matches($css.Content) | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
+        $uniq = @($truetype + $urls) | Select-Object -Unique
         if($uniq -and $uniq.Count){ return $uniq }
       } catch { Log ("GF CSS2 error ($Family/$fmt): $($_.Exception.Message)") "WARN" }
     }
@@ -134,24 +138,30 @@ function Get-FontFromGoogleCSS {
   @()
 }
 
-# GitHub Content API (lấy download_url)
+# GitHub Content API (then fetch via jsDelivr by sha)
+$__ghCache = @{}
 function Get-GitHubContentFiles {
   param([string]$Owner,[string]$Repo,[string]$Path,[string]$Pattern='\.ttf$')
+  $key = "$Owner/$Repo/$Path/$Pattern"
+  if($__ghCache.ContainsKey($key)){ return $__ghCache[$key] }
+
   $api = "https://api.github.com/repos/$Owner/$Repo/contents/$Path"
   try {
-    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13' } $api | ConvertFrom-Json
+    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.1' } $api | ConvertFrom-Json
     $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
-    $urls  = $files | Select-Object -ExpandProperty download_url
-    $urls | Select-Object -Unique
+    $urls  = foreach($f in $files){ "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$($f.sha)/$Path/$($f.name)" }
+    $urls = $urls | Select-Object -Unique
+    $__ghCache[$key] = $urls
+    return $urls
   } catch { Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"; @() }
 }
 
-# Kết hợp: trả list URL TTF/OTF (ưu tiên GF CSS2 → Fontsource API → GitHub GF ofl)
+# Order: Fontsource → Google CSS2 → GitHub (ofl)
 function Resolve-FontTTF {
   param([string]$Family)
   $urls=@()
-  $urls += Get-FontFromGoogleCSS $Family
-  if(-not $urls){ $urls += Get-FontFromFontsourceAPI $Family }
+  $urls += Get-FontFromFontsourceAPI $Family
+  if(-not $urls){ $urls += Get-FontFromGoogleCSS $Family }
   if(-not $urls){
     $folder = ($Family.ToLower() -replace '[^a-z0-9]','')
     $urls += Get-GitHubContentFiles -Owner "googlefonts" -Repo "fonts" -Path ("ofl/{0}" -f $folder) -Pattern '\.(ttf|otf)$'
@@ -206,7 +216,7 @@ function Install-One { param([string]$SrcPath,[string]$Fallback="Custom")
     catch { New-ItemProperty -Path $reg -Name $key -Value $fi.Name -PropertyType String -Force | Out-Null }
     Say ("Installed: {0} -> {1}" -f $face,$fi.Name) "Green"
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
-    if(-not $owned){ $owned=@() }
+    if(-not $owned){ $owned=@() } elseif($owned -is [string]){ $owned=@($owned) }
     $owned = $owned + $fi.Name | Select-Object -Unique
     New-ItemProperty -Path $StateKey -Name "Owned" -Value $owned -PropertyType MultiString -Force | Out-Null
     return @{Face=$face;File=$fi.Name}
@@ -223,7 +233,11 @@ function Uninstall-One { param([string]$File)
     if(Test-Path $full){ try { Remove-Item $full -Force -ErrorAction SilentlyContinue } catch {} }
     Say ("Uninstalled file: {0}" -f $File) "Yellow"
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
-    if($owned){ $owned = $owned | Where-Object { $_ -ne $File }; New-ItemProperty -Path $StateKey -Name "Owned" -Value $owned -PropertyType MultiString -Force | Out-Null }
+    if($owned){
+      if($owned -is [string]){ $owned=@($owned) }
+      $owned = $owned | Where-Object { $_ -ne $File }
+      New-ItemProperty -Path $StateKey -Name "Owned" -Value $owned -PropertyType MultiString -Force | Out-Null
+    }
   } catch { Log ("Uninstall warn: {0}" -f $_.Exception.Message) "WARN" }
 }
 
@@ -268,14 +282,13 @@ function Prepend-Link { param([string]$Base,[string[]]$Pairs)
     try {
       $cur=(Get-ItemProperty -Path $key -Name $Base -ErrorAction SilentlyContinue).$Base
       if (-not $cur){$cur=@()}
+      if($cur -is [string]){ $cur=@($cur) }
       $new=($Pairs + $cur) | Select-Object -Unique
       New-ItemProperty -Path $key -Name $Base -Value $new -PropertyType MultiString -Force | Out-Null
       Log ("SystemLink [{0}] ({1}) <= {2}" -f $Base,$root,($Pairs -join ' | '))
     } catch { Say ("Prepend error {0}/{1}: {2}" -f $Base,$root,$_.Exception.Message) "Red" "ERROR" }
   }
 }
-
-# --- PickRandom cho generic ---
 function PickRandom { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
   $candidates=@()
   foreach($n in $Prefer){
@@ -283,7 +296,7 @@ function PickRandom { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
       $ok = if($Exact){ $k -eq $n } else { ($k -eq $n) -or ($k -like ($n + "*")) }
       if($ok){
         $f=$Map[$k]
-        if($f -and (Test-Path (Join-Path $env:SystemRoot\Fonts $f))){
+        if($f -and (Test-Path (Join-Path $FontsDir $f))){
           $candidates += ,@{Face=$k;Pair=("{0},{1}" -f $f,$k)}
         }
       }
@@ -316,6 +329,20 @@ function Patch-ChromiumFonts {
   } catch { Say ("Chromium patch error: {0}" -f $_.Exception.Message) "Red" "ERROR" }
 }
 
+# ---- Refresh-Fonts (khôi phục hàm bị thiếu) ----
+function Refresh-Fonts {
+  try {
+    Stop-Service FontCache -Force -ErrorAction SilentlyContinue
+    Start-Sleep 1
+    Remove-Item "$env:LOCALAPPDATA\FontCache\*" -Force -ErrorAction SilentlyContinue
+  } catch {}
+  try { Start-Service FontCache -ErrorAction SilentlyContinue } catch {}
+  try {
+    Add-Type -Namespace Win32 -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,IntPtr l,uint f,uint t,out IntPtr r);'
+    [void][Win32.U]::SendMessageTimeout([IntPtr]0xffff,0x1D,[IntPtr]0,[IntPtr]0,2,1000,[ref]([IntPtr]::Zero))
+  } catch {}
+}
+
 # ===================== MAIN =====================
 Clear-Host
 Write-Host "==============================================================" -ForegroundColor Green
@@ -330,9 +357,10 @@ Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 for($round=1; $round -le $MaxRounds; $round++){
   Say ("--- ROUND {0} ---" -f $round) "White"
 
-  # 0) Uninstall (skip nếu -KeepGrowth)
+  # 0) Uninstall cũ (nếu muốn dọn)
   if(-not $KeepGrowth){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
+    if($owned -is [string]){ $owned=@($owned) }
     $ownedCount = if($owned){ $owned.Count } else { 0 }
     if($ownedCount -gt 0){
       $rmMax = [Math]::Min($UninstallMax, $ownedCount)
@@ -346,13 +374,13 @@ for($round=1; $round -le $MaxRounds; $round++){
     } else { Say ("Uninstalling 0 previously-installed fonts...") "Yellow" }
   }
 
-  # 1) INSTALL fresh từ API: Unicode boosters + families
+  # 1) INSTALL fresh từ API
   $target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
   $familyBag=@(); foreach($cat in $FAMILIES.Keys){ foreach($fam in $FAMILIES[$cat]){ $familyBag += ,@{Cat=$cat;Fam=$fam} } }
   $familyPick = $familyBag | Get-Random -Count ([Math]::Min($target, $familyBag.Count))
   $installed=0
 
-  # Unicode boosters via GitHub Content API
+  # Unicode boosters
   foreach($b in ($UNICODE_BOOST | Get-Random -Count ([Math]::Min(3,$UNICODE_BOOST.Count)))){
     $urls = Get-GitHubContentFiles -Owner $b.Owner -Repo $b.Repo -Path $b.Path -Pattern $b.Pattern
     if($urls -and $urls.Count){
@@ -374,10 +402,11 @@ for($round=1; $round -le $MaxRounds; $round++){
     } else { Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR" }
   }
 
-  # 1b) Synth duplicate (tùy mạng) – không tải, chỉ nhân bản để đảm bảo Inventory đổi
+  # 1b) Synth duplicate (nếu số cài ít)
   if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
-    if($owned -and $owned.Count -gt 0){
+    if($owned){
+      if($owned -is [string]){ $owned=@($owned) }
       $dupCount = [Math]::Min(3, $owned.Count)
       foreach($f in ($owned | Get-Random -Count $dupCount)){
         $src = Join-Path $FontsDir $f
@@ -391,7 +420,8 @@ for($round=1; $round -le $MaxRounds; $round++){
             $key = ("{0} (TrueType)" -f $face)
             New-ItemProperty -Path $reg -Name $key -Value $new -PropertyType String -Force | Out-Null
             $owned2 = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
-            if(-not $owned2){ $owned2=@() }; $owned2 = $owned2 + $new | Select-Object -Unique
+            if(-not $owned2){ $owned2=@() } elseif($owned2 -is [string]){ $owned2=@($owned2) }
+            $owned2 = $owned2 + $new | Select-Object -Unique
             New-ItemProperty -Path $StateKey -Name "Owned" -Value $owned2 -PropertyType MultiString -Force | Out-Null
             Say ("Synthesized duplicate: {0}" -f $new) "Yellow"
           } catch {}
@@ -400,7 +430,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     }
   }
 
-  # 2) RANDOMIZE fallbacks + substitutes (kèm cursive/fantasy)
+  # 2) RANDOMIZE fallbacks + substitutes (có cả cursive/fantasy)
   $map = FaceMap
   $sans  = PickRandom -Prefer @("Inter","Open Sans","Noto Sans","Work Sans","Manrope","Poppins","DM Sans","Karla","Rubik","Heebo","Outfit","Sora","Plus Jakarta Sans","Nunito Sans","Mulish","Urbanist","Lato","Raleway","Montserrat") -Map $map
   $serif = PickRandom -Prefer @("Merriweather","Lora","Libre Baskerville","Playfair Display","Source Serif","Source Serif 4","Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine","Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos") -Map $map
@@ -424,28 +454,22 @@ for($round=1; $round -le $MaxRounds; $round++){
   }
   if($sym1){ Prepend-Link -Base "Segoe UI Symbol" -Pairs @($sym1.Pair); }
   if($emoji){ Prepend-Link -Base "Segoe UI Emoji"  -Pairs @($emoji.Pair); }
-  if($sans){  New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Segoe UI" -Value $sans.Face -PropertyType String -Force | Out-Null
-              New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Segoe UI" -Value $sans.Face -PropertyType String -Force | Out-Null
-              New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Arial" -Value $sans.Face -PropertyType String -Force | Out-Null
-              New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Arial" -Value $sans.Face -PropertyType String -Force | Out-Null }
-  if($serif){ Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Times New Roman" -Value $serif.Face -Force
-              Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Times New Roman" -Value $serif.Face -Force
-              New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Cambria" -Value $serif.Face -PropertyType String -Force | Out-Null
-              New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Cambria" -Value $serif.Face -PropertyType String -Force | Out-Null }
-  if($mono){  Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Courier New" -Value $mono.Face -Force
-              Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Courier New" -Value $mono.Face -Force
-              New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Consolas" -Value $mono.Face -PropertyType String -Force | Out-Null
-              New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Consolas" -Value $mono.Face -PropertyType String -Force | Out-Null }
-  if($sym1){  Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Segoe UI Symbol" -Value $sym1.Face -Force
-              Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Segoe UI Symbol" -Value $sym1.Face -Force
-              Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Cambria Math" -Value $sym1.Face -Force
-              Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Cambria Math" -Value $sym1.Face -Force }
-  if($emoji){ Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Segoe UI Emoji" -Value $emoji.Face -Force
-              Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Segoe UI Emoji" -Value $emoji.Face -Force }
-  if($cursive){ Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Comic Sans MS" -Value $cursive.Face -Force
-                Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Comic Sans MS" -Value $cursive.Face -Force }
-  if($fantasy){ Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Impact" -Value $fantasy.Face -Force
-                Set-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -Name "Impact" -Value $fantasy.Face -Force }
+
+  foreach($root in @('HKLM','HKCU')){
+    $sub=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
+    if($sans){  New-ItemProperty -Path $sub -Name "Segoe UI" -Value $sans.Face -PropertyType String -Force | Out-Null
+                New-ItemProperty -Path $sub -Name "Arial"    -Value $sans.Face -PropertyType String -Force | Out-Null }
+    if($serif){ New-ItemProperty -Path $sub -Name "Times New Roman" -Value $serif.Face -PropertyType String -Force | Out-Null
+                New-ItemProperty -Path $sub -Name "Cambria"        -Value $serif.Face -PropertyType String -Force | Out-Null }
+    if($mono){  New-ItemProperty -Path $sub -Name "Courier New" -Value $mono.Face -PropertyType String -Force | Out-Null
+                New-ItemProperty -Path $sub -Name "Consolas"    -Value $mono.Face -PropertyType String -Force | Out-Null }
+    if($sym1){  New-ItemProperty -Path $sub -Name "Segoe UI Symbol" -Value $sym1.Face -PropertyType String -Force | Out-Null
+                New-ItemProperty -Path $sub -Name "Cambria Math"    -Value $sym1.Face -PropertyType String -Force | Out-Null }
+    if($emoji){ New-ItemProperty -Path $sub -Name "Segoe UI Emoji" -Value $emoji.Face -PropertyType String -Force | Out-Null }
+    if($cursive){ New-ItemProperty -Path $sub -Name "Comic Sans MS" -Value $cursive.Face -PropertyType String -Force | Out-Null }
+    if($fantasy){ New-ItemProperty -Path $sub -Name "Impact" -Value $fantasy.Face -PropertyType String -Force | Out-Null }
+  }
+
   Refresh-Fonts
 
   # 3) Patch Chromium
