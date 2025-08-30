@@ -1,9 +1,9 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.13.4-API-GFKEY-TOKENINLINE-HOTFIX
-  - Tải font qua API uy tín: Fontsource Data API, Google Web Fonts API (có key),
-    CSS2 (Google/Bunny), FontLibrary API, GitHub Content API (qua jsDelivr/Statically theo SHA).
+  ADVANCED FONT FINGERPRINT ROTATOR v3.13.5-API-GFKEY-TOKENINLINE-HOTFIX2
+  - Nguồn tải qua API: Fontsource Data API, Google Web Fonts API (có key),
+    CSS2 (Google/Bunny), FontLibrary API, GitHub Content API (qua jsDelivr/Statically by SHA).
   - Mỗi lần chạy cố gắng đổi cả Inventory (Font Metrics) & Unicode Glyphs.
-  - Mặc định KHÔNG gỡ font cũ (KeepGrowth = $true).
+  - Mặc định KHÔNG gỡ font đã cài (KeepGrowth = $true).
   - Patch default fonts Chrome/Edge (standard/serif/sans/fixed/cursive/fantasy).
   - Log: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
@@ -13,7 +13,7 @@ param(
   [int]$InstallMax   = 18,
   [int]$UninstallMin = 6,
   [int]$UninstallMax = 10,
-  [switch]$KeepGrowth = $true,     # giữ nguyên font cũ
+  [switch]$KeepGrowth = $true,     # giữ nguyên font cũ (no uninstall)
   [switch]$NoChromiumFonts = $false,
   [switch]$NoForceClose    = $false,
   [string]$ChromeProfile = "Default",
@@ -22,9 +22,9 @@ param(
   [string]$GoogleApiKey = $env:GF_API_KEY   # nếu trống sẽ dùng INLINE bên dưới
 )
 
-# ==== ĐIỀN KEY Ở ĐÂY ====
-$INLINE_GF_API_KEY   = "AIzaSyB7LR94DdSCSLLn3E0fV3wK7IP_ZDX4wtk"   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
-$INLINE_GITHUB_TOKEN = "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"   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
+# ==== ĐIỀN KEY TẠI ĐÂY (tuỳ chọn) ====
+$INLINE_GF_API_KEY   = ""   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
+$INLINE_GITHUB_TOKEN = ""   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
 
 # Ưu tiên: tham số -> INLINE -> env
 if ([string]::IsNullOrWhiteSpace($GoogleApiKey) -and -not [string]::IsNullOrWhiteSpace($INLINE_GF_API_KEY)) {
@@ -43,7 +43,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.13.4-API-GFKEY-TOKENINLINE-HOTFIX"
+$Version = "3.13.5-API-GFKEY-TOKENINLINE-HOTFIX2"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -91,7 +91,7 @@ $UNICODE_BOOST = @(
 # ===================== API RESOLVERS =====================
 
 # GitHub headers
-$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.4' }
+$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.5' }
 if($Global:GITHUB_TOKEN){ $Global:GHHeaders['Authorization'] = "token $Global:GITHUB_TOKEN" }
 
 function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
@@ -144,7 +144,7 @@ function Get-FontFromFontsourceAPI {
   if($alias.ContainsKey($pkg)){ $pkg = $alias[$pkg] }
   $api = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg@latest"
   try {
-    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.4' } $api | ConvertFrom-Json
+    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.5' } $api | ConvertFrom-Json
   } catch { Log ("Fontsource API ($pkg) error: $($_.Exception.Message)") "WARN"; return @() }
 
   $all=@()
@@ -271,7 +271,8 @@ function Download-File {
   return $false
 }
 
-function Get-FontFace { param([string]$Path)
+function Get-FontFace {
+  param([string]$Path)
   try {
     Add-Type -AssemblyName System.Drawing -ErrorAction Stop
     $pfc = New-Object System.Drawing.Text.PrivateFontCollection
@@ -281,7 +282,11 @@ function Get-FontFace { param([string]$Path)
   return [IO.Path]::GetFileNameWithoutExtension($Path)
 }
 
-function Install-One { param([string]$SrcPath,[string]$Fallback="Custom"])
+function Install-One {
+  param(
+    [string]$SrcPath,
+    [string]$Fallback = "Custom"
+  )
   try {
     $fi = Get-Item $SrcPath
     $dest = Join-Path $FontsDir $fi.Name
