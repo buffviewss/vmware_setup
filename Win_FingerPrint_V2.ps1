@@ -118,6 +118,7 @@ function New-GHCDNUrls {
 
 # HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
 $__ghCache = @{}
+
 function Get-GitHubContentFiles {
   param(
     [string]$Owner,
@@ -126,27 +127,24 @@ function Get-GitHubContentFiles {
     [string]$Pattern = '\.(ttf|otf)$'
   )
 
+  # Tạo khóa để kiểm tra cache
   $key = "$Owner/$Repo/$Path/$Pattern"
   if ($__ghCache.ContainsKey($key)) { return $__ghCache[$key] }
 
+  # Đường dẫn cần lấy từ GitHub
   $tryPaths = @($Path)
-  if ($Path -match '^hinted/')   { $tryPaths += ($Path -replace '^hinted/','unhinted/') }
-  if ($Path -match '^unhinted/') { $tryPaths += ($Path -replace '^unhinted/','hinted/') }
-  $tryPaths = $tryPaths | Select-Object -Unique
-
-  # Sử dụng branch mặc định 'main' (hoặc 'master' nếu cần)
-  $ref = 'main'
+  $ref  = 'main'  # Đảm bảo lấy từ nhánh chính (main)
   $urls = @()
 
+  # Lấy tệp từ các đường dẫn đã cho
   foreach($p in $tryPaths){
     try {
-      # Gọi API GitHub để lấy danh sách tệp
+      # Gọi API GitHub để lấy nội dung trong thư mục
       $api = "https://api.github.com/repos/$Owner/$Repo/contents/$p?ref=$ref"
       $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api | ConvertFrom-Json
       $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
 
       if ($files) {
-        # Tạo danh sách URL tải về
         foreach($f in $files){
           if ($f.download_url) { $urls += $f.download_url }
           $urls += New-GHCDNUrls $Owner $Repo $ref $p $f.name
@@ -157,20 +155,34 @@ function Get-GitHubContentFiles {
     }
   }
 
-  # Fallback: Nếu không tìm thấy file, sử dụng URL mặc định cho các tệp emoji
+  # Nếu không có tệp nào, thử lại với fallback cho các font chính (ví dụ: NotoSans)
   if (-not $urls -or $urls.Count -eq 0) {
-    # Tải tệp emoji, NotoSansMath và các tệp unicode khác từ GitHub
-    $urls += New-GHCDNUrls $Owner $Repo 'main' 'fonts' 'NotoColorEmoji.ttf'
-    $urls += New-GHCDNUrls $Owner $Repo 'main' 'unhinted/ttf/NotoSansMath' 'NotoSansMath-Regular.ttf'
-    $urls += New-GHCDNUrls $Owner $Repo 'main' 'unhinted/ttf/NotoMusic' 'NotoMusic-Regular.ttf'
+    if ($Owner -eq 'googlefonts' -and $Repo -eq 'noto-emoji' -and $Path -eq 'fonts') {
+      # Sử dụng font mặc định từ noto-emoji
+      $urls += New-GHCDNUrls $Owner $Repo 'main' 'fonts' 'NotoColorEmoji.ttf'
+    } elseif ($Owner -eq 'notofonts' -and $Repo -eq 'noto-fonts' -and $Path -eq 'unhinted/ttf') {
+      # Sử dụng font mặc định từ noto-fonts
+      $urls += New-GHCDNUrls $Owner $Repo 'main' 'unhinted/ttf' 'NotoSans-Regular.ttf'
+    }
   }
 
-
-  # Lọc các tệp có định dạng .ttf hoặc .otf
+  # Loại bỏ các URL trùng lặp
   $urls = $urls | Where-Object { $_ -match '\.(ttf|otf)($|\?)' } | Select-Object -Unique
   $__ghCache[$key] = $urls
   return $urls
 }
+
+# Thêm hàm New-GHCDNUrls để tạo link từ GitHub CDN
+function New-GHCDNUrls {
+  param([string]$Owner, [string]$Repo, [string]$Ref, [string]$Path, [string]$Name)
+  @(
+    "https://raw.githubusercontent.com/$Owner/$Repo/$Ref/$Path/$Name",  # Link trực tiếp
+    "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$Ref/$Path/$Name",      # CDN jsDelivr
+    "https://cdn.statically.io/gh/$Owner/$Repo@$Ref/$Path/$Name"      # CDN Statically
+  )
+}
+
+
 
 
 
@@ -517,26 +529,59 @@ for($round=1; $round -le $MaxRounds; $round++){
   # INSTALL từ API
   $target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
   $familyBag=@(); foreach($cat in $FAMILIES.Keys){ foreach($fam in $FAMILIES[$cat]){ $familyBag += ,@{Cat=$cat;Fam=$fam} } }
-  $familyPick = $familyBag | Get-Random -Count ([Math]::Min($target, $familyBag.Count))
+  foreach($t in $familyPick) {
+    $fam = $t.Fam  # Tên font gia đình
+    $urls = Resolve-FontTTF $fam  # Lấy URL font gia đình
+    if ($urls -and $urls.Count) {
+        # Lấy tên file từ URL
+        $fname = [IO.Path]::GetFileName((($urls[0] -split '\?')[0]))  
+        
+        # Đảm bảo phần mở rộng là .ttf
+        if (-not $fname.EndsWith(".ttf") -and -not $fname.EndsWith(".otf")) {
+            $fname = ($fam -replace '\s','') + ".ttf"
+        }
+        
+        # Tạo đường dẫn tạm cho font
+        $out = Join-Path $TempDir $fname
+        
+        # Tải file và cài đặt
+        if (Download-File -Urls $urls -OutFile $out) {
+            if (Install-One -SrcPath $out -Fallback $fam) {
+                $installed++  # Tăng số lượng font đã cài
+            }
+        } else {
+            # Nếu tải xuống không thành công, thông báo lỗi
+            Say ("Download failed via API: {0}" -f $fam) "Red" "ERROR"
+        }
+    } else {
+        # Nếu không tìm thấy font
+        Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR"
+    }
+}
+
   $installed=0
 
  # Unicode boosters
 foreach($b in ($UNICODE_BOOST | Get-Random -Count ([Math]::Min(3,$UNICODE_BOOST.Count)))) {
-  # Lấy các file từ GitHub theo thông tin trong $UNICODE_BOOST
-  $urls = Get-GitHubContentFiles -Owner $b.Owner -Repo $b.Repo -Path $b.Path -Pattern $b.Pattern
-  if ($urls -and $urls.Count) {
-    $name = [IO.Path]::GetFileName(($urls[0] -split '\?')[0])  # Lấy tên file từ URL
-    $out = Join-Path $TempDir $name  # Đường dẫn tạm cho font
-    # Download file và cài đặt
-    if (Download-File -Urls $urls -OutFile $out) {
-      if (Install-One -SrcPath $out -Fallback $b.Name) {
-        $installed++  # Tăng số lượng font đã cài đặt
-      }
+    # Lấy các file từ GitHub theo thông tin trong $UNICODE_BOOST
+    $urls = Get-GitHubContentFiles -Owner $b.Owner -Repo $b.Repo -Path $b.Path -Pattern $b.Pattern
+    if ($urls -and $urls.Count) {
+        # Lấy tên file từ URL
+        $name = [IO.Path]::GetFileName(($urls[0] -split '\?')[0])
+        
+        # Tạo đường dẫn tạm cho font
+        $out = Join-Path $TempDir $name
+        
+        # Tải file về và cài đặt
+        if (Download-File -Urls $urls -OutFile $out) {
+            if (Install-One -SrcPath $out -Fallback $b.Name) {
+                $installed++  # Tăng số lượng font đã cài đặt
+            }
+        }
+    } else {
+        # Nếu không tìm thấy file, thông báo lỗi
+        Say ("API could not resolve (boost): {0}/{1}/{2}" -f $b.Owner, $b.Repo, $b.Path) "Red" "ERROR"
     }
-  } else {
-    # Nếu không tìm thấy file
-    Say ("API could not resolve (boost): {0}/{1}/{2}" -f $b.Owner, $b.Repo, $b.Path) "Red" "ERROR"
-  }
 }
 
 # Tiếp tục xử lý các font từ danh sách đã chọn
