@@ -1,16 +1,11 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.13.3-API-GFKEY-TOKENINLINE
-  - Chỉ tải font qua API uy tín: Fontsource Data API, Google Web Fonts
-    Developer API (có key), CSS2 (Google/Bunny), FontLibrary, GitHub Content
-    API (fetch qua jsDelivr/Statically theo SHA). Không dùng link release/raw.
+  ADVANCED FONT FINGERPRINT ROTATOR v3.13.4-API-GFKEY-TOKENINLINE-HOTFIX
+  - Tải font qua API uy tín: Fontsource Data API, Google Web Fonts API (có key),
+    CSS2 (Google/Bunny), FontLibrary API, GitHub Content API (qua jsDelivr/Statically theo SHA).
   - Mỗi lần chạy cố gắng đổi cả Inventory (Font Metrics) & Unicode Glyphs.
-  - Mặc định KHÔNG gỡ font đã cài (KeepGrowth = $true). Có thể tắt để dọn.
+  - Mặc định KHÔNG gỡ font cũ (KeepGrowth = $true).
   - Patch default fonts Chrome/Edge (standard/serif/sans/fixed/cursive/fantasy).
   - Log: %USERPROFILE%\Downloads\log.txt
-
-  *** Điền token tại đây (chỉ cần sửa chuỗi, phần còn lại tự nhận): ***
-    - Google Fonts API key:   $INLINE_GF_API_KEY
-    - GitHub Personal Token:  $INLINE_GITHUB_TOKEN  (tùy chọn, tăng limit)
 =================================================================== #>
 
 param(
@@ -24,18 +19,17 @@ param(
   [string]$ChromeProfile = "Default",
   [string]$EdgeProfile   = "Default",
   [int]$MaxRounds = 3,
-  [string]$GoogleApiKey = $env:GF_API_KEY   # có thể truyền qua tham số; nếu trống sẽ dùng INLINE bên dưới
+  [string]$GoogleApiKey = $env:GF_API_KEY   # nếu trống sẽ dùng INLINE bên dưới
 )
 
-# ==== INLINE TOKENS (SỬA 2 DÒNG NÀY LÀ XONG) ====
-$INLINE_GF_API_KEY   = "AIzaSyB7LR94DdSCSLLn3E0fV3wK7IP_ZDX4wtk"   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
-$INLINE_GITHUB_TOKEN = "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"   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
+# ==== ĐIỀN KEY Ở ĐÂY ====
+$INLINE_GF_API_KEY   = ""   # ví dụ: "AIzaSyDxxxxxxxxxxxxxxxxxxxx"
+$INLINE_GITHUB_TOKEN = ""   # ví dụ: "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" (tùy chọn)
 
-# Áp dụng ưu tiên: param -> INLINE -> env
+# Ưu tiên: tham số -> INLINE -> env
 if ([string]::IsNullOrWhiteSpace($GoogleApiKey) -and -not [string]::IsNullOrWhiteSpace($INLINE_GF_API_KEY)) {
   $GoogleApiKey = $INLINE_GF_API_KEY
 }
-# GitHub token dùng biến global như cũ, nhưng ưu tiên INLINE
 $Global:GITHUB_TOKEN = if(-not [string]::IsNullOrWhiteSpace($INLINE_GITHUB_TOKEN)){
   $INLINE_GITHUB_TOKEN
 } elseif(-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)){
@@ -49,7 +43,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.13.3-API-GFKEY-TOKENINLINE"
+$Version = "3.13.4-API-GFKEY-TOKENINLINE-HOTFIX"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -86,18 +80,18 @@ $FAMILIES = @{
             "Iosevka","Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
 }
 
-# Unicode boosters – discover qua GitHub Content API (fetch qua CDN theo SHA)
+# Unicode boosters – lấy qua GitHub Content API (rồi tải qua CDN theo SHA)
 $UNICODE_BOOST = @(
-  @{ Owner="googlefonts"; Repo="noto-emoji"; Path="fonts"; Pattern="^NotoColorEmoji\.ttf$";   Name="Noto Color Emoji" },
-  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansSymbols2"; Pattern="Regular\.ttf$"; Name="Noto Sans Symbols 2" },
-  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansMath";     Pattern="Regular\.ttf$"; Name="Noto Sans Math" },
-  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoMusic";        Pattern="Regular\.ttf$"; Name="Noto Music" }
+  @{ Owner="googlefonts"; Repo="noto-emoji"; Path="fonts";                          Pattern="^NotoColorEmoji\.ttf$";   Name="Noto Color Emoji" },
+  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansSymbols2";    Pattern="Regular\.ttf$";            Name="Noto Sans Symbols 2" },
+  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansMath";        Pattern="Regular\.ttf$";            Name="Noto Sans Math" },
+  @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoMusic";           Pattern="Regular\.ttf$";            Name="Noto Music" }
 )
 
 # ===================== API RESOLVERS =====================
 
-# GitHub headers (token optional để vượt rate-limit)
-$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.3' }
+# GitHub headers
+$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.4' }
 if($Global:GITHUB_TOKEN){ $Global:GHHeaders['Authorization'] = "token $Global:GITHUB_TOKEN" }
 
 function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
@@ -107,24 +101,37 @@ function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
   )
 }
 
+# HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
 $__ghCache = @{}
 function Get-GitHubContentFiles {
-  param([string]$Owner,[string]$Repo,[string]$Path,[string]$Pattern='\.ttf$')
+  param(
+    [string]$Owner,
+    [string]$Repo,
+    [string]$Path,
+    [string]$Pattern = '\.(ttf|otf)$'
+  )
   $key = "$Owner/$Repo/$Path/$Pattern"
-  if($__ghCache.ContainsKey($key)){ return $__ghCache[$key] }
+  if ($__ghCache.ContainsKey($key)) { return $__ghCache[$key] }
+
   $api = "https://api.github.com/repos/$Owner/$Repo/contents/$Path"
   try {
-    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api | ConvertFrom-Json
+    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api |
+             ConvertFrom-Json
     $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
-    $urls  = foreach($f in $files){ New-GHCDNUrls $Owner $Repo $f.sha $Path $f.name } | Select-Object -ExpandProperty * -Unique
+    $acc = @()
+    foreach($f in $files){
+      $acc += New-GHCDNUrls $Owner $Repo $f.sha $Path $f.name
+    }
+    $urls = $acc | Select-Object -Unique
     $__ghCache[$key] = $urls
-    $urls
+    return $urls
   } catch {
-    Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"; @()
+    Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"
+    return @()
   }
 }
 
-# Fontsource Data API (prefer exact @latest, broaden match)
+# Fontsource Data API
 function Get-FontFromFontsourceAPI {
   param([string]$Family)
   $pkg = ($Family.ToLower() -replace '[\s_]+','-')
@@ -137,7 +144,7 @@ function Get-FontFromFontsourceAPI {
   if($alias.ContainsKey($pkg)){ $pkg = $alias[$pkg] }
   $api = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg@latest"
   try {
-    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.3' } $api | ConvertFrom-Json
+    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.4' } $api | ConvertFrom-Json
   } catch { Log ("Fontsource API ($pkg) error: $($_.Exception.Message)") "WARN"; return @() }
 
   $all=@()
@@ -163,7 +170,7 @@ function Get-FontFromFontsourceAPI {
   @()
 }
 
-# CSS2 đa host (Google & Bunny) – parser lấy .ttf/.otf + format("truetype")
+# CSS2 (Google/Bunny)
 function Get-FontFromCSS2 {
   param([string]$Family, [string]$Host = "fonts.googleapis.com", [int[]]$Weights=@(400,500,300))
   $ua = 'Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/KRT16M) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36'
@@ -186,7 +193,7 @@ function Get-FontFromCSS2 {
   @()
 }
 
-# Font Library API (trả link TTF/OTF gốc)
+# Font Library API
 function Get-FontFromFontlibraryAPI {
   param([string]$Family)
   $slug = ($Family.ToLower() -replace '[^a-z0-9]+','-')
@@ -199,7 +206,7 @@ function Get-FontFromFontlibraryAPI {
   } catch { Log ("FontLibrary API ($slug) error: $($_.Exception.Message)") "WARN"; @() }
 }
 
-# Google Web Fonts Developer API (v1) – load index 1 lần
+# Google Web Fonts Developer API (v1)
 $Global:GF_API_OK = $false
 $Global:GF_Index  = @()
 function Init-GFAPI {
@@ -230,32 +237,19 @@ function Get-FontFromGFAPI {
   $urls | Select-Object -Unique
 }
 
-# Resolver tổng – thứ tự ưu tiên
+# Resolver tổng
 function Resolve-FontTTF {
   param([string]$Family)
   $urls=@()
-
-  # 1) Fontsource
   $urls += Get-FontFromFontsourceAPI $Family
-
-  # 2) Google Web Fonts Developer API (có key)
   if(-not $urls){ if(Init-GFAPI $GoogleApiKey){ $urls += Get-FontFromGFAPI $Family } }
-
-  # 3) Google CSS2
   if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -Host "fonts.googleapis.com" }
-
-  # 4) Bunny Fonts CSS2 (mirror)
   if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -Host "fonts.bunny.net" }
-
-  # 5) Font Library
   if(-not $urls){ $urls += Get-FontFromFontlibraryAPI $Family }
-
-  # 6) GitHub Content API + CDN theo SHA
   if(-not $urls){
     $folder = ($Family.ToLower() -replace '[^a-z0-9]','')
     $urls += Get-GitHubContentFiles -Owner "googlefonts" -Repo "fonts" -Path ("ofl/{0}" -f $folder) -Pattern '\.(ttf|otf)$'
   }
-
   $urls | Select-Object -Unique
 }
 
@@ -287,7 +281,7 @@ function Get-FontFace { param([string]$Path)
   return [IO.Path]::GetFileNameWithoutExtension($Path)
 }
 
-function Install-One { param([string]$SrcPath,[string]$Fallback="Custom")
+function Install-One { param([string]$SrcPath,[string]$Fallback="Custom"])
   try {
     $fi = Get-Item $SrcPath
     $dest = Join-Path $FontsDir $fi.Name
@@ -417,7 +411,7 @@ function Patch-ChromiumFonts {
   } catch { Say ("Chromium patch error: {0}" -f $_.Exception.Message) "Red" "ERROR" }
 }
 
-# ---- Refresh-Fonts (dọn cache + broadcast WM_FONTCHANGE) ----
+# ---- Refresh-Fonts ----
 function Refresh-Fonts {
   try {
     Stop-Service FontCache -Force -ErrorAction SilentlyContinue
@@ -445,7 +439,6 @@ Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 for($round=1; $round -le $MaxRounds; $round++){
   Say ("--- ROUND {0} ---" -f $round) "White"
 
-  # 0) Uninstall cũ (nếu muốn dọn)
   if(-not $KeepGrowth){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
     if($owned -is [string]){ $owned=@($owned) }
@@ -462,7 +455,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     } else { Say ("Uninstalling 0 previously-installed fonts...") "Yellow" }
   }
 
-  # 1) INSTALL fresh từ API
+  # INSTALL từ API
   $target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
   $familyBag=@(); foreach($cat in $FAMILIES.Keys){ foreach($fam in $FAMILIES[$cat]){ $familyBag += ,@{Cat=$cat;Fam=$fam} } }
   $familyPick = $familyBag | Get-Random -Count ([Math]::Min($target, $familyBag.Count))
@@ -490,7 +483,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     } else { Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR" }
   }
 
-  # 1b) Synth duplicate (nếu số cài ít) – tăng xác suất đổi InventoryHash
+  # Bơm duplicate nếu thiếu để tăng xác suất đổi InventoryHash
   if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
     if($owned){
@@ -518,7 +511,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     }
   }
 
-  # 2) RANDOMIZE fallbacks + substitutes (thêm cursive/fantasy)
+  # RANDOMIZE fallbacks + substitutes
   $map = FaceMap
   $sans  = PickRandom -Prefer @("Inter","Open Sans","Noto Sans","Work Sans","Manrope","Poppins","DM Sans","Karla","Rubik","Heebo","Outfit","Sora","Plus Jakarta Sans","Nunito Sans","Mulish","Urbanist","Lato","Raleway","Montserrat") -Map $map
   $serif = PickRandom -Prefer @("Merriweather","Lora","Libre Baskerville","Playfair Display","Source Serif","Source Serif 4","Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine","Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos") -Map $map
@@ -542,7 +535,6 @@ for($round=1; $round -le $MaxRounds; $round++){
   }
   if($sym1){ Prepend-Link -Base "Segoe UI Symbol" -Pairs @($sym1.Pair); }
   if($emoji){ Prepend-Link -Base "Segoe UI Emoji"  -Pairs @($emoji.Pair); }
-
   foreach($root in @('HKLM','HKCU')){
     $sub=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
     if($sans){  New-ItemProperty -Path $sub -Name "Segoe UI" -Value $sans.Face -PropertyType String -Force | Out-Null
@@ -560,7 +552,7 @@ for($round=1; $round -le $MaxRounds; $round++){
 
   Refresh-Fonts
 
-  # 3) Patch Chromium
+  # Patch Chromium
   if(-not $NoForceClose){ Kill-Browsers }
   if(-not $NoChromiumFonts){
     $sf = if($sans){$sans.Face}else{"Arial"}
@@ -574,7 +566,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     Patch-ChromiumFonts -PrefsPath $edge   -Sans $sf -Serif $rf -Mono $mf -Cursive $cf -Fantasy $ff
   } else { Say "NoChromiumFonts: SKIP patch Chrome/Edge." "Yellow" }
 
-  # 4) Check hashes
+  # Check hashes
   $newInv = InvHash; $newFB = FBHash
   Say ("Round {0} Inventory:  {1} -> {2}" -f $round,(Head32 $beforeInv),(Head32 $newInv)) "White"
   Say ("Round {0} Fallback :  {1} -> {2}" -f $round,(Head32 $beforeFB),(Head32 $newFB)) "White"
