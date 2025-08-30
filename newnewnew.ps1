@@ -1,10 +1,11 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.13.1-API-ONLY-HOTFIX
-  - Chỉ tải font qua API uy tín: Google Fonts CSS2, Fontsource Data API,
-    GitHub Content API (tải qua jsDelivr theo SHA). Không dùng link release/raw.
+  ADVANCED FONT FINGERPRINT ROTATOR v3.13.2-API-GFKEY
+  - Chỉ tải font qua API uy tín: Fontsource Data API, Google Web Fonts
+    Developer API (có key), CSS2 (Google/Bunny), FontLibrary, GitHub Content
+    API (fetch qua jsDelivr/Statically theo SHA). Không dùng link release/raw.
   - Mỗi lần chạy cố gắng đổi cả Inventory (Font Metrics) & Unicode Glyphs.
-  - Mặc định KHÔNG gỡ font đã cài (KeepGrowth = $true).
-  - Có patch default fonts Chrome/Edge (tùy chọn).
+  - Mặc định KHÔNG gỡ font đã cài (KeepGrowth = $true). Có thể tắt để dọn.
+  - Có patch default fonts Chrome/Edge (standard/serif/sans/fixed/cursive/fantasy).
   - Log: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
 
@@ -18,7 +19,8 @@ param(
   [switch]$NoForceClose    = $false,
   [string]$ChromeProfile = "Default",
   [string]$EdgeProfile   = "Default",
-  [int]$MaxRounds = 3
+  [int]$MaxRounds = 3,
+  [string]$GoogleApiKey = $env:GF_API_KEY   # Web Fonts Developer API key (đặt qua env để khỏi lộ)
 )
 
 # ---- Admin check ----
@@ -28,7 +30,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.13.1-API-ONLY-HOTFIX"
+$Version = "3.13.2-API-GFKEY"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -55,17 +57,17 @@ if (!(Test-Path $StateKey)) { New-Item -Path $StateKey -Force | Out-Null }
 # ---- Pools ----
 $FAMILIES = @{
   Sans  = @("Inter","Open Sans","Roboto","Noto Sans","Work Sans","Manrope","Poppins",
-            "DM Sans","Karla","Rubik","Cabin","Asap","Lexend","Heebo","Outfit",
-            "Sora","Plus Jakarta Sans","Nunito Sans","Mulish","Urbanist","Montserrat",
-            "Raleway","Lato","Source Sans 3","PT Sans","Fira Sans","IBM Plex Sans")
+            "DM Sans","Karla","Rubik","Heebo","Outfit","Sora","Plus Jakarta Sans",
+            "Nunito Sans","Mulish","Urbanist","Lato","Raleway","Montserrat",
+            "Source Sans 3","PT Sans","Fira Sans","IBM Plex Sans")
   Serif = @("Merriweather","Lora","Libre Baskerville","Playfair Display","Source Serif 4",
             "Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine",
             "Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos")
-  Mono  = @("Source Code Pro","JetBrains Mono","Inconsolata","Cousine","Anonymous Pro",
+  Mono  = @("JetBrains Mono","Source Code Pro","Inconsolata","Cousine","Anonymous Pro",
             "Iosevka","Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
 }
 
-# Unicode boosters – lấy qua GitHub Content API (sau đó tải qua jsDelivr theo SHA)
+# Unicode boosters – discover qua GitHub Content API (fetch qua CDN theo SHA)
 $UNICODE_BOOST = @(
   @{ Owner="googlefonts"; Repo="noto-emoji"; Path="fonts"; Pattern="^NotoColorEmoji\.ttf$";   Name="Noto Color Emoji" },
   @{ Owner="googlefonts"; Repo="noto-fonts"; Path="hinted/ttf/NotoSansSymbols2"; Pattern="Regular\.ttf$"; Name="Noto Sans Symbols 2" },
@@ -74,6 +76,35 @@ $UNICODE_BOOST = @(
 )
 
 # ===================== API RESOLVERS =====================
+
+# GitHub headers (tuỳ chọn token để vượt rate-limit)
+$Global:GITHUB_TOKEN = $env:GITHUB_TOKEN
+$Global:GHHeaders = @{ 'User-Agent'='FontRotator/3.13.2' }
+if($Global:GITHUB_TOKEN){ $Global:GHHeaders['Authorization'] = "token $Global:GITHUB_TOKEN" }
+
+function New-GHCDNUrls($owner,$repo,$sha,$path,$name){
+  @(
+    "https://cdn.jsdelivr.net/gh/$owner/$repo@$sha/$path/$name",
+    "https://cdn.statically.io/gh/$owner/$repo@$sha/$path/$name"
+  )
+}
+
+$__ghCache = @{}
+function Get-GitHubContentFiles {
+  param([string]$Owner,[string]$Repo,[string]$Path,[string]$Pattern='\.ttf$')
+  $key = "$Owner/$Repo/$Path/$Pattern"
+  if($__ghCache.ContainsKey($key)){ return $__ghCache[$key] }
+  $api = "https://api.github.com/repos/$Owner/$Repo/contents/$Path"
+  try {
+    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api | ConvertFrom-Json
+    $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
+    $urls  = foreach($f in $files){ New-GHCDNUrls $Owner $Repo $f.sha $Path $f.name } | Select-Object -ExpandProperty * -Unique
+    $__ghCache[$key] = $urls
+    $urls
+  } catch {
+    Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"; @()
+  }
+}
 
 # Fontsource Data API (prefer exact @latest, broaden match)
 function Get-FontFromFontsourceAPI {
@@ -86,10 +117,9 @@ function Get-FontFromFontsourceAPI {
     "playfair-display"="playfair-display"; "gentium-book-plus"="gentium-book-plus"; "jetbrains-mono"="jetbrains-mono"
   }
   if($alias.ContainsKey($pkg)){ $pkg = $alias[$pkg] }
-
   $api = "https://data.jsdelivr.com/v1/package/npm/@fontsource/$pkg@latest"
   try {
-    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.1' } $api | ConvertFrom-Json
+    $json = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.2' } $api | ConvertFrom-Json
   } catch { Log ("Fontsource API ($pkg) error: $($_.Exception.Message)") "WARN"; return @() }
 
   $all=@()
@@ -115,77 +145,115 @@ function Get-FontFromFontsourceAPI {
   @()
 }
 
-# Google Fonts CSS2 (try to fetch TTF/OTF; spoof Android UA)
-function Get-FontFromGoogleCSS {
-  param([string]$Family,[int[]]$Weights=@(400,500,300))
+# CSS2 đa host (Google & Bunny) – parser lấy .ttf/.otf + format("truetype")
+function Get-FontFromCSS2 {
+  param([string]$Family, [string]$Host = "fonts.googleapis.com", [int[]]$Weights=@(400,500,300))
   $ua = 'Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/KRT16M) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36'
-  $headers = @{ 'User-Agent'=$ua; 'Accept'='text/css,*/*;q=0.1'; 'Referer'='https://fonts.googleapis.com/' }
+  $headers = @{ 'User-Agent'=$ua; 'Accept'='text/css,*/*;q=0.1'; 'Referer'=("https://{0}/" -f $Host) }
   foreach($w in $Weights){
     foreach($fmt in @("wght@$w","ital,wght@0,$w")){
       $famQuery = [uri]::EscapeDataString($Family) -replace '%20','+'
-      $cssUrl = "https://fonts.googleapis.com/css2?family=$($famQuery):$fmt&display=swap"
+      $cssUrl = "https://$Host/css2?family=$($famQuery):$fmt&display=swap"
       try {
         $css = Invoke-WebRequest -Headers $headers -UseBasicParsing -TimeoutSec 60 $cssUrl
-        $urls = @()
+        $urls=@()
         $urls += ([regex]'url\(([^)]+\.ttf)\)').Matches($css.Content)  | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
         $urls += ([regex]'url\(([^)]+\.otf)\)').Matches($css.Content)  | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
         $truetype = ([regex]'url\(([^)]+)\)\s*format\("truetype"\)').Matches($css.Content) | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
-        $uniq = @($truetype + $urls) | Select-Object -Unique
-        if($uniq -and $uniq.Count){ return $uniq }
-      } catch { Log ("GF CSS2 error ($Family/$fmt): $($_.Exception.Message)") "WARN" }
+        $pick = @($truetype + $urls) | Select-Object -Unique
+        if($pick.Count){ return $pick }
+      } catch { Log ("CSS2 error ($Host/$Family/$fmt): $($_.Exception.Message)") "WARN" }
     }
   }
   @()
 }
 
-# GitHub Content API (then fetch via jsDelivr by sha)
-$__ghCache = @{}
-function Get-GitHubContentFiles {
-  param([string]$Owner,[string]$Repo,[string]$Path,[string]$Pattern='\.ttf$')
-  $key = "$Owner/$Repo/$Path/$Pattern"
-  if($__ghCache.ContainsKey($key)){ return $__ghCache[$key] }
-
-  $api = "https://api.github.com/repos/$Owner/$Repo/contents/$Path"
+# Font Library API (trả link TTF/OTF gốc)
+function Get-FontFromFontlibraryAPI {
+  param([string]$Family)
+  $slug = ($Family.ToLower() -replace '[^a-z0-9]+','-')
+  $api  = "https://fontlibrary.org/api/v1/font/$slug"
   try {
-    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.13.1' } $api | ConvertFrom-Json
-    $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
-    $urls  = foreach($f in $files){ "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$($f.sha)/$Path/$($f.name)" }
-    $urls = $urls | Select-Object -Unique
-    $__ghCache[$key] = $urls
-    return $urls
-  } catch { Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"; @() }
+    $res = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 $api | ConvertFrom-Json
+    $text = ($res | ConvertTo-Json -Depth 12)
+    $urls = [regex]::Matches($text,'https?:\/\/[^"\\s]+?\.(ttf|otf)') | ForEach-Object { $_.Value }
+    ($urls | Select-Object -Unique)
+  } catch { Log ("FontLibrary API ($slug) error: $($_.Exception.Message)") "WARN"; @() }
 }
 
-# Order: Fontsource → Google CSS2 → GitHub (ofl)
+# Google Web Fonts Developer API (v1) – load index 1 lần
+$Global:GF_API_OK = $false
+$Global:GF_Index  = @()
+function Init-GFAPI {
+  param([string]$Key)
+  if($Global:GF_API_OK){ return $true }
+  if([string]::IsNullOrWhiteSpace($Key)){ return $false }
+  $url = "https://www.googleapis.com/webfonts/v1/webfonts?key=$Key&sort=popularity&prettyPrint=false&fields=items(family,category,files,variants,subsets)"
+  try {
+    $res = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'Accept'='application/json' } $url
+    $Global:GF_Index = ( $res.Content | ConvertFrom-Json ).items
+    if($Global:GF_Index){ $Global:GF_API_OK = $true; Say "GF API: loaded $($Global:GF_Index.Count) families" "Green" }
+    return $Global:GF_API_OK
+  } catch {
+    Log ("GF API init error: $($_.Exception.Message)") "WARN"
+    return $false
+  }
+}
+function Get-FontFromGFAPI {
+  param([string]$Family)
+  if(-not $Global:GF_API_OK -or -not $Global:GF_Index){ return @() }
+  $item = $Global:GF_Index | Where-Object { $_.family -ieq $Family } | Select-Object -First 1
+  if(-not $item){ return @() }
+  $urls=@()
+  if($item.files){
+    $urls += $item.files.PSObject.Properties | ForEach-Object { $_.Value } |
+             Where-Object { $_ -match '\.(ttf|otf)($|\?)' }
+  }
+  $urls | Select-Object -Unique
+}
+
+# Resolver tổng – thứ tự ưu tiên
 function Resolve-FontTTF {
   param([string]$Family)
   $urls=@()
+
+  # 1) Fontsource
   $urls += Get-FontFromFontsourceAPI $Family
-  if(-not $urls){ $urls += Get-FontFromGoogleCSS $Family }
+
+  # 2) Google Web Fonts Developer API (có key)
+  if(-not $urls){ if(Init-GFAPI $GoogleApiKey){ $urls += Get-FontFromGFAPI $Family } }
+
+  # 3) Google CSS2
+  if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -Host "fonts.googleapis.com" }
+
+  # 4) Bunny Fonts CSS2 (mirror)
+  if(-not $urls){ $urls += Get-FontFromCSS2 -Family $Family -Host "fonts.bunny.net" }
+
+  # 5) Font Library
+  if(-not $urls){ $urls += Get-FontFromFontlibraryAPI $Family }
+
+  # 6) GitHub Content API + CDN theo SHA
   if(-not $urls){
     $folder = ($Family.ToLower() -replace '[^a-z0-9]','')
     $urls += Get-GitHubContentFiles -Owner "googlefonts" -Repo "fonts" -Path ("ofl/{0}" -f $folder) -Pattern '\.(ttf|otf)$'
   }
+
   $urls | Select-Object -Unique
 }
 
 # ===================== Core helpers =====================
 function Download-File {
-  param([string[]]$Urls,[string]$OutFile,[int]$Retry=2)
+  param([string[]]$Urls,[string]$OutFile,[int]$Retry=3)
   $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
   foreach($u in $Urls){
     for($i=1;$i -le $Retry;$i++){
       try {
         Log ("Download attempt {0}: {1}" -f $i,$u)
-        if ($PSVersionTable.PSVersion.Major -ge 7) {
-          Invoke-WebRequest -Uri $u -OutFile $OutFile -TimeoutSec 240 -Headers @{ 'User-Agent'=$ua }
-        } else {
-          try { Start-BitsTransfer -Source $u -Destination $OutFile -ErrorAction Stop }
-          catch { Invoke-WebRequest -Uri $u -OutFile $OutFile -Headers @{ 'User-Agent'=$ua } }
-        }
-        if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 1000)) { Log ("Download OK: {0}" -f $OutFile); return $true }
+        try { Start-BitsTransfer -Source $u -Destination $OutFile -ErrorAction Stop }
+        catch { Invoke-WebRequest -Uri $u -OutFile $OutFile -TimeoutSec 240 -Headers @{ 'User-Agent'=$ua } }
+        if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 10kb)) { Log ("Download OK: {0}" -f $OutFile); return $true }
       } catch { Log ("Download error: {0}" -f $_.Exception.Message) "ERROR" }
-      Start-Sleep -Seconds ([Math]::Min((Get-Random -Minimum 1 -Maximum 5)*$i,8))
+      Start-Sleep -Seconds ([Math]::Min((Get-Random -Minimum 1 -Maximum 5)*$i,10))
     }
   }
   return $false
@@ -276,6 +344,7 @@ function FBHash {
     ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-','')
   } catch { "NA" }
 }
+
 function Prepend-Link { param([string]$Base,[string[]]$Pairs)
   foreach($root in @('HKLM','HKCU')){
     $key=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink" -f $root)
@@ -289,6 +358,7 @@ function Prepend-Link { param([string]$Base,[string[]]$Pairs)
     } catch { Say ("Prepend error {0}/{1}: {2}" -f $Base,$root,$_.Exception.Message) "Red" "ERROR" }
   }
 }
+
 function PickRandom { param([string[]]$Prefer,[hashtable]$Map,[switch]$Exact)
   $candidates=@()
   foreach($n in $Prefer){
@@ -329,7 +399,7 @@ function Patch-ChromiumFonts {
   } catch { Say ("Chromium patch error: {0}" -f $_.Exception.Message) "Red" "ERROR" }
 }
 
-# ---- Refresh-Fonts (khôi phục hàm bị thiếu) ----
+# ---- Refresh-Fonts (dọn cache + broadcast WM_FONTCHANGE) ----
 function Refresh-Fonts {
   try {
     Stop-Service FontCache -Force -ErrorAction SilentlyContinue
@@ -402,7 +472,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     } else { Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR" }
   }
 
-  # 1b) Synth duplicate (nếu số cài ít)
+  # 1b) Synth duplicate (nếu số cài ít) – tăng xác suất đổi InventoryHash
   if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
     if($owned){
@@ -430,7 +500,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     }
   }
 
-  # 2) RANDOMIZE fallbacks + substitutes (có cả cursive/fantasy)
+  # 2) RANDOMIZE fallbacks + substitutes (thêm cursive/fantasy)
   $map = FaceMap
   $sans  = PickRandom -Prefer @("Inter","Open Sans","Noto Sans","Work Sans","Manrope","Poppins","DM Sans","Karla","Rubik","Heebo","Outfit","Sora","Plus Jakarta Sans","Nunito Sans","Mulish","Urbanist","Lato","Raleway","Montserrat") -Map $map
   $serif = PickRandom -Prefer @("Merriweather","Lora","Libre Baskerville","Playfair Display","Source Serif","Source Serif 4","Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine","Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos") -Map $map
