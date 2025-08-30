@@ -172,22 +172,32 @@ function Get-FontFromFontsourceAPI {
 
 # CSS2 (Google/Bunny)
 function Get-FontFromCSS2 {
-  param([string]$Family, [string]$Host = "fonts.googleapis.com", [int[]]$Weights=@(400,500,300))
+  param(
+    [string]$Family,
+    [string]$CssHost = "fonts.googleapis.com",
+    [int[]]$Weights = @(400,500,300)
+  )
   $ua = 'Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/KRT16M) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36'
-  $headers = @{ 'User-Agent'=$ua; 'Accept'='text/css,*/*;q=0.1'; 'Referer'=("https://{0}/" -f $Host) }
+  $headers = @{
+    'User-Agent' = $ua
+    'Accept'     = 'text/css,*/*;q=0.1'
+    'Referer'    = ("https://{0}/" -f $CssHost)
+  }
   foreach($w in $Weights){
     foreach($fmt in @("wght@$w","ital,wght@0,$w")){
       $famQuery = [uri]::EscapeDataString($Family) -replace '%20','+'
-      $cssUrl = "https://$Host/css2?family=$($famQuery):$fmt&display=swap"
+      $cssUrl   = "https://$CssHost/css2?family=$($famQuery):$fmt&display=swap"
       try {
         $css = Invoke-WebRequest -Headers $headers -UseBasicParsing -TimeoutSec 60 $cssUrl
-        $urls=@()
+        $urls = @()
         $urls += ([regex]'url\(([^)]+\.ttf)\)').Matches($css.Content)  | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
         $urls += ([regex]'url\(([^)]+\.otf)\)').Matches($css.Content)  | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
         $truetype = ([regex]'url\(([^)]+)\)\s*format\("truetype"\)').Matches($css.Content) | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
         $pick = @($truetype + $urls) | Select-Object -Unique
         if($pick.Count){ return $pick }
-      } catch { Log ("CSS2 error ($Host/$Family/$fmt): $($_.Exception.Message)") "WARN" }
+      } catch {
+        Log ("CSS2 error ($CssHost/$Family/$fmt): $($_.Exception.Message)") "WARN"
+      }
     }
   }
   @()
