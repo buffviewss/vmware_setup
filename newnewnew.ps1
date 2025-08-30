@@ -11,7 +11,7 @@ param(
   [int]$InstallMax   = 18,
   [int]$UninstallMin = 6,
   [int]$UninstallMax = 10,
-  [switch]$KeepGrowth = $false,
+  [switch]$KeepGrowth = $true,
   [switch]$NoChromiumFonts = $false,
   [switch]$NoForceClose    = $false,
   [string]$ChromeProfile = "Default",
