@@ -1,7 +1,7 @@
 <# ===================================================================
-  ADVANCED FONT FINGERPRINT ROTATOR v3.12-API-RAND-HOTFIX
+  ADVANCED FONT FINGERPRINT ROTATOR v3.12.1-API-RAND-HOTFIX
   - Mỗi lần chạy: đổi Inventory (Font Metrics) + Unicode Glyphs
-  - Nguồn tải: Fontsource (jsDelivr/unpkg) → GF CSS2 → GitHub GF (fallback)
+  - Nguồn tải: Fontsource (jsDelivr/unpkg) → Google Fonts CSS2 → GitHub GF (fallback)
   - Random SystemLink/Substitutes + patch Chrome/Edge default fonts
   Log: %USERPROFILE%\Downloads\log.txt
 =================================================================== #>
@@ -11,7 +11,7 @@ param(
   [int]$InstallMax   = 18,
   [int]$UninstallMin = 6,
   [int]$UninstallMax = 10,
-  [switch]$KeepGrowth = $true,
+  [switch]$KeepGrowth = $false,
   [switch]$NoChromiumFonts = $false,
   [switch]$NoForceClose    = $false,
   [string]$ChromeProfile = "Default",
@@ -26,7 +26,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   Read-Host "Press Enter to exit"; exit 1
 }
 
-$Version = "3.12-API-RAND-HOTFIX"
+$Version = "3.12.1-API-RAND-HOTFIX"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Logging ----
@@ -83,7 +83,7 @@ $UNICODE_BOOST = @(
 
 # ===================== API RESOLVERS =====================
 
-# Hard map (khi mạng khó/ bị chặn API)
+# Hard map
 $HardMap = @{
   "Inter"              = @("https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.ttf","https://unpkg.com/@fontsource/inter/files/inter-latin-400-normal.ttf")
   "Roboto"             = @("https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-latin-400-normal.ttf","https://unpkg.com/@fontsource/roboto/files/roboto-latin-400-normal.ttf")
@@ -130,10 +130,8 @@ $HardMap = @{
   "Ubuntu Mono"        = @("https://cdn.jsdelivr.net/npm/@fontsource/ubuntu-mono/files/ubuntu-mono-latin-400-normal.ttf","https://unpkg.com/@fontsource/ubuntu-mono/files/ubuntu-mono-latin-400-normal.ttf")
   "Red Hat Mono"       = @("https://cdn.jsdelivr.net/npm/@fontsource/red-hat-mono/files/red-hat-mono-latin-400-normal.ttf","https://unpkg.com/@fontsource/red-hat-mono/files/red-hat-mono-latin-400-normal.ttf")
 }
-
-# Fontsource slug & GF ofl folder helpers
 $FontsourceMap = @{
-  "Plus Jakarta Sans" = "plus-jakarta-sans"; "Source Serif 4"="source-serif-4"; "Old Standard TT"="old-standard-tt"
+  "Plus Jakarta Sans"="plus-jakarta-sans"; "Source Serif 4"="source-serif-4"; "Old Standard TT"="old-standard-tt"
   "EB Garamond"="eb-garamond"; "IBM Plex Sans"="ibm-plex-sans"; "IBM Plex Mono"="ibm-plex-mono"
   "PT Sans"="pt-sans"; "Fira Sans"="fira-sans"; "Source Sans 3"="source-sans-3"; "Red Hat Mono"="red-hat-mono"
   "Playfair Display"="playfair-display"; "Gentium Book Plus"="gentium-book-plus"; "JetBrains Mono"="jetbrains-mono"
@@ -157,7 +155,7 @@ function Get-FontFromFontsource {
      "https://unpkg.com/@fontsource/$pkg/files/$file")
 }
 
-# 2) Google Fonts CSS2 (gstatic TTF – UA Android 4.4)
+# 2) Google Fonts CSS2 (gstatic TTF – UA Android 4.4)  <<<< đã vá
 function Get-FontFromGoogleCSS {
   param([string]$Family,[int[]]$Weights=@(400,500,300))
   $ua = 'Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/KRT16M) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36'
@@ -165,7 +163,7 @@ function Get-FontFromGoogleCSS {
   foreach($w in $Weights){
     foreach($fmt in @("wght@$w","ital,wght@0,$w")){
       $famQuery = [uri]::EscapeDataString($Family) -replace '%20','+'
-      $cssUrl = "https://fonts.googleapis.com/css2?family=$famQuery:$fmt&display=swap"
+      $cssUrl = "https://fonts.googleapis.com/css2?family=$($famQuery):$fmt&display=swap"
       try {
         $css = Invoke-WebRequest -Headers $headers -UseBasicParsing -TimeoutSec 60 $cssUrl
         $ttf = ([regex]'url\(([^)]+\.ttf)\)').Matches($css.Content) | ForEach-Object { $_.Groups[1].Value.Trim("'`"") }
@@ -183,7 +181,7 @@ function Get-FontFromGitHubGF {
   $folder = To-GFFolder $Family
   $api = "https://api.github.com/repos/google/fonts/contents/ofl/$folder"
   try {
-    $list = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.12' } $api | ConvertFrom-Json
+    $list = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers @{ 'User-Agent'='FontRotator/3.12.1' } $api | ConvertFrom-Json
     $ttf = $list | Where-Object { $_.type -eq 'file' -and $_.name -match '\.(ttf|otf)$' } | Select-Object -ExpandProperty name
     $pick = ($ttf | Where-Object { $_ -match 'wght' } | Select-Object -First 1); if(-not $pick){ $pick = $ttf | Select-Object -First 1 }
     if($pick){ ,@("https://raw.githubusercontent.com/google/fonts/main/ofl/$folder/$pick") } else { @() }
@@ -369,7 +367,7 @@ Say ("Fallback Hash : {0}..." -f (Head32 $beforeFB)) "Cyan"
 for($round=1; $round -le $MaxRounds; $round++){
   Say ("--- ROUND {0} ---" -f $round) "White"
 
-  # 0) Uninstall (an toàn)
+  # 0) Uninstall (an toàn; sẽ SKIP nếu -KeepGrowth)
   if(-not $KeepGrowth){
     $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
     $ownedCount = if($owned){ $owned.Count } else { 0 }
@@ -383,12 +381,8 @@ for($round=1; $round -le $MaxRounds; $round++){
         Refresh-Fonts
         foreach($f in $rmList){ Uninstall-One $f }
         Refresh-Fonts
-      } else {
-        Say ("Uninstalling 0 previously-installed fonts...") "Yellow"
-      }
-    } else {
-      Say ("Uninstalling 0 previously-installed fonts...") "Yellow"
-    }
+      } else { Say ("Uninstalling 0 previously-installed fonts...") "Yellow" }
+    } else { Say ("Uninstalling 0 previously-installed fonts...") "Yellow" }
   }
 
   # 1) INSTALL fresh: boosters + family via API
