@@ -118,7 +118,6 @@ function New-GHCDNUrls {
 
 # HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
 $__ghCache = @{}
-$__ghCache = @{}
 function Get-GitHubContentFiles {
   param(
     [string]$Owner,
@@ -135,38 +134,19 @@ function Get-GitHubContentFiles {
   if ($Path -match '^unhinted/') { $tryPaths += ($Path -replace '^unhinted/','hinted/') }
   $tryPaths = $tryPaths | Select-Object -Unique
 
-  # Get the default branch (usually 'main' or 'master')
-  $ref  = Get-GHDefaultRef -Owner $Owner -Repo $Repo    
+  # Sử dụng branch mặc định 'main' (hoặc 'master' nếu cần)
+  $ref = 'main'
   $urls = @()
-
-  # Ưu tiên các file Emoji theo thứ tự: WindowsCompatible, Emoji, NoFlags, ...
-  $prefer = @()
-  if ($Owner -eq 'googlefonts' -and $Repo -eq 'noto-emoji' -and $Path -eq 'fonts') {
-    $prefer = @(
-      'NotoColorEmoji_WindowsCompatible.ttf',
-      'NotoColorEmoji.ttf',
-      'NotoColorEmoji-noflags.ttf',
-      'NotoColorEmoji-emojicompat.ttf',
-      'Noto-COLRv1.ttf',
-      'Noto-COLRv1-noflags.ttf',
-      'Noto-COLRv1-emojiCompat.ttf'
-    )
-  }
 
   foreach($p in $tryPaths){
     try {
-      $api = "https://api.github.com/repos/$Owner/$Repo/contents/$p"
+      # Gọi API GitHub để lấy danh sách tệp
+      $api = "https://api.github.com/repos/$Owner/$Repo/contents/$p?ref=$ref"
       $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api | ConvertFrom-Json
       $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
 
       if ($files) {
-        # Sắp xếp file theo thứ tự ưu tiên
-        if ($prefer.Count -gt 0) {
-          $files = $files | Sort-Object @{Expression={
-            $i = $prefer.IndexOf($_.name); if ($i -ge 0) { $i } else { 999 }
-          }}
-        }
-
+        # Tạo danh sách URL tải về
         foreach($f in $files){
           if ($f.download_url) { $urls += $f.download_url }
           $urls += New-GHCDNUrls $Owner $Repo $ref $p $f.name
@@ -177,17 +157,21 @@ function Get-GitHubContentFiles {
     }
   }
 
-  # Nếu không có link nào, dùng fallback bằng branch default 'main'
+  # Fallback: Nếu không tìm thấy file, sử dụng URL mặc định cho các tệp emoji
   if (-not $urls -or $urls.Count -eq 0) {
-    foreach($p in $tryPaths){
-      $urls += New-GHCDNUrls $Owner $Repo 'main' $p 'NotoColorEmoji.ttf'
-    }
+    # Tải tệp emoji, NotoSansMath và các tệp unicode khác từ GitHub
+    $urls += New-GHCDNUrls $Owner $Repo 'main' 'fonts' 'NotoColorEmoji.ttf'
+    $urls += New-GHCDNUrls $Owner $Repo 'main' 'unhinted/ttf/NotoSansMath' 'NotoSansMath-Regular.ttf'
+    $urls += New-GHCDNUrls $Owner $Repo 'main' 'unhinted/ttf/NotoMusic' 'NotoMusic-Regular.ttf'
   }
 
+
+  # Lọc các tệp có định dạng .ttf hoặc .otf
   $urls = $urls | Where-Object { $_ -match '\.(ttf|otf)($|\?)' } | Select-Object -Unique
   $__ghCache[$key] = $urls
   return $urls
 }
+
 
 
 
@@ -680,3 +664,5 @@ Say "`n--- FINAL HASHES ---" "Cyan"
 Say ("Inventory:  {0}" -f $finalInv) "White"
 Say ("Fallback :  {0}" -f $finalFB) "White"
 Log ("Run finished. v{0}" -f $Version)
+
+
