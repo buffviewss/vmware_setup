@@ -558,7 +558,7 @@ foreach($t in $familyPick){
 }
 
 # Bơm duplicate nếu thiếu để tăng xác suất đổi InventoryHash
-if($installed -lt [Math]::Max(3,[Math]::Floor($target/3)]){
+if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){   # đúng
   $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
   if($owned){
     if($owned -is [string]){ $owned=@($owned) }
