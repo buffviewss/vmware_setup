@@ -77,7 +77,7 @@ $FAMILIES = @{
             "Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine",
             "Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos")
   Mono  = @("JetBrains Mono","Source Code Pro","Inconsolata","Cousine","Anonymous Pro",
-            ,"Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
+            "Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
 }
 
 # Unicode boosters – lấy qua GitHub Content API (rồi tải qua CDN theo SHA)
@@ -117,7 +117,6 @@ function New-GHCDNUrls {
 
 
 # HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
-$__ghCache = @{}
 
 $__ghCache = @{}
 function Get-GitHubContentFiles {
@@ -507,7 +506,7 @@ for($round=1; $round -le $MaxRounds; $round++){
     } else { Say ("Uninstalling 0 previously-installed fonts...") "Yellow" }
   }
 
-  # INSTALL từ API
+ 
  # INSTALL từ API
 $target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
 
