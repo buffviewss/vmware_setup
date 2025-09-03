@@ -77,7 +77,7 @@ $FAMILIES = @{
             "Cardo","Crimson Pro","Cormorant Garamond","Old Standard TT","Domine",
             "Spectral","EB Garamond","Gentium Book Plus","Literata","Tinos")
   Mono  = @("JetBrains Mono","Source Code Pro","Inconsolata","Cousine","Anonymous Pro",
-            "Iosevka","Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
+            ,"Fira Code","IBM Plex Mono","Ubuntu Mono","Red Hat Mono")
 }
 
 # Unicode boosters – lấy qua GitHub Content API (rồi tải qua CDN theo SHA)
@@ -119,6 +119,7 @@ function New-GHCDNUrls {
 # HOTFIX: không pipe ngay sau foreach; tích lũy trước rồi Unique
 $__ghCache = @{}
 
+$__ghCache = @{}
 function Get-GitHubContentFiles {
   param(
     [string]$Owner,
@@ -126,62 +127,42 @@ function Get-GitHubContentFiles {
     [string]$Path,
     [string]$Pattern = '\.(ttf|otf)$'
   )
-
-  # Tạo khóa để kiểm tra cache
   $key = "$Owner/$Repo/$Path/$Pattern"
   if ($__ghCache.ContainsKey($key)) { return $__ghCache[$key] }
 
-  # Đường dẫn cần lấy từ GitHub
-  $tryPaths = @($Path)
-  $ref  = 'main'  # Đảm bảo lấy từ nhánh chính (main)
-  $urls = @()
+  $ref = 'main'
+  $api = "https://api.github.com/repos/$Owner/$Repo/contents/$Path?ref=$ref"
+  try {
+    $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api |
+             ConvertFrom-Json
 
-  # Lấy tệp từ các đường dẫn đã cho
-  foreach($p in $tryPaths){
-    try {
-      # Gọi API GitHub để lấy nội dung trong thư mục
-      $api = "https://api.github.com/repos/$Owner/$Repo/contents/$p?ref=$ref"
-      $items = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Headers $Global:GHHeaders $api | ConvertFrom-Json
+    # Ưu tiên dùng raw download_url (ổn định)
+    $urls = @()
+    $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern -and $_.download_url }
+    if ($files) {
+      $urls += ($files | ForEach-Object { $_.download_url })
+    }
+
+    # Nếu muốn có mirror CDN bổ sung thì thêm các URL phụ (không bắt buộc):
+    if (-not $urls -or $urls.Count -eq 0) {
       $files = $items | Where-Object { $_.type -eq 'file' -and $_.name -match $Pattern }
-
-      if ($files) {
-        foreach($f in $files){
-          if ($f.download_url) { $urls += $f.download_url }
-          $urls += New-GHCDNUrls $Owner $Repo $ref $p $f.name
-        }
+      foreach($f in $files){
+        $urls += @(
+          "https://raw.githubusercontent.com/$Owner/$Repo/$ref/$Path/$($f.name)",
+          "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$ref/$Path/$($f.name)",
+          "https://cdn.statically.io/gh/$Owner/$Repo@$ref/$Path/$($f.name)"
+        )
       }
-    } catch {
-      Log ("GitHub API error ($Owner/$Repo/$p): $($_.Exception.Message)") "WARN"
     }
+
+    $urls = $urls | Where-Object { $_ -match '\.(ttf|otf)($|\?)' } | Select-Object -Unique
+    $__ghCache[$key] = $urls
+    return $urls
+  } catch {
+    Log ("GitHub API error ($Owner/$Repo/$Path): $($_.Exception.Message)") "WARN"
+    return @()
   }
-
-  # Nếu không có tệp nào, thử lại với fallback cho các font chính (ví dụ: NotoSans)
-  if (-not $urls -or $urls.Count -eq 0) {
-    if ($Owner -eq 'googlefonts' -and $Repo -eq 'noto-emoji' -and $Path -eq 'fonts') {
-      # Sử dụng font mặc định từ noto-emoji
-      $urls += New-GHCDNUrls $Owner $Repo 'main' 'fonts' 'NotoColorEmoji.ttf'
-    } elseif ($Owner -eq 'notofonts' -and $Repo -eq 'noto-fonts' -and $Path -eq 'unhinted/ttf') {
-      # Sử dụng font mặc định từ noto-fonts
-      $urls += New-GHCDNUrls $Owner $Repo 'main' 'unhinted/ttf' 'NotoSans-Regular.ttf'
-    }
-  }
-
-  # Loại bỏ các URL trùng lặp
-  $urls = $urls | Where-Object { $_ -match '\.(ttf|otf)($|\?)' } | Select-Object -Unique
-  $__ghCache[$key] = $urls
-  return $urls
 }
-
-# Thêm hàm New-GHCDNUrls để tạo link từ GitHub CDN
-function New-GHCDNUrls {
-  param([string]$Owner, [string]$Repo, [string]$Ref, [string]$Path, [string]$Name)
-  @(
-    "https://raw.githubusercontent.com/$Owner/$Repo/$Ref/$Path/$Name",  # Link trực tiếp
-    "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$Ref/$Path/$Name",      # CDN jsDelivr
-    "https://cdn.statically.io/gh/$Owner/$Repo@$Ref/$Path/$Name"      # CDN Statically
-  )
-}
-
 
 
 
@@ -527,107 +508,74 @@ for($round=1; $round -le $MaxRounds; $round++){
   }
 
   # INSTALL từ API
-  $target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
-  $familyBag=@(); foreach($cat in $FAMILIES.Keys){ foreach($fam in $FAMILIES[$cat]){ $familyBag += ,@{Cat=$cat;Fam=$fam} } }
-  foreach($t in $familyPick) {
-    $fam = $t.Fam  # Tên font gia đình
-    $urls = Resolve-FontTTF $fam  # Lấy URL font gia đình
-    if ($urls -and $urls.Count) {
-        # Lấy tên file từ URL
-        $fname = [IO.Path]::GetFileName((($urls[0] -split '\?')[0]))  
-        
-        # Đảm bảo phần mở rộng là .ttf
-        if (-not $fname.EndsWith(".ttf") -and -not $fname.EndsWith(".otf")) {
-            $fname = ($fam -replace '\s','') + ".ttf"
-        }
-        
-        # Tạo đường dẫn tạm cho font
-        $out = Join-Path $TempDir $fname
-        
-        # Tải file và cài đặt
-        if (Download-File -Urls $urls -OutFile $out) {
-            if (Install-One -SrcPath $out -Fallback $fam) {
-                $installed++  # Tăng số lượng font đã cài
-            }
-        } else {
-            # Nếu tải xuống không thành công, thông báo lỗi
-            Say ("Download failed via API: {0}" -f $fam) "Red" "ERROR"
-        }
-    } else {
-        # Nếu không tìm thấy font
-        Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR"
-    }
+ # INSTALL từ API
+$target = Get-Random -Minimum $InstallMin -Maximum ($InstallMax+1)
+
+# Tạo túi font
+$familyBag = @()
+foreach($cat in $FAMILIES.Keys){
+  foreach($fam in $FAMILIES[$cat]){
+    $familyBag += ,@{Cat=$cat;Fam=$fam}
+  }
 }
 
-  $installed=0
+# Chọn ngẫu nhiên các family để cài thử
+$familyPick = $familyBag | Get-Random -Count ([Math]::Min($target, $familyBag.Count))
+$installed = 0
 
- # Unicode boosters
-foreach($b in ($UNICODE_BOOST | Get-Random -Count ([Math]::Min(3,$UNICODE_BOOST.Count)))) {
-    # Lấy các file từ GitHub theo thông tin trong $UNICODE_BOOST
-    $urls = Get-GitHubContentFiles -Owner $b.Owner -Repo $b.Repo -Path $b.Path -Pattern $b.Pattern
-    if ($urls -and $urls.Count) {
-        # Lấy tên file từ URL
-        $name = [IO.Path]::GetFileName(($urls[0] -split '\?')[0])
-        
-        # Tạo đường dẫn tạm cho font
-        $out = Join-Path $TempDir $name
-        
-        # Tải file về và cài đặt
-        if (Download-File -Urls $urls -OutFile $out) {
-            if (Install-One -SrcPath $out -Fallback $b.Name) {
-                $installed++  # Tăng số lượng font đã cài đặt
-            }
-        }
-    } else {
-        # Nếu không tìm thấy file, thông báo lỗi
-        Say ("API could not resolve (boost): {0}/{1}/{2}" -f $b.Owner, $b.Repo, $b.Path) "Red" "ERROR"
+# Unicode boosters (lấy từ GitHub)
+foreach($b in ($UNICODE_BOOST | Get-Random -Count ([Math]::Min(3,$UNICODE_BOOST.Count)))){
+  $urls = Get-GitHubContentFiles -Owner $b.Owner -Repo $b.Repo -Path $b.Path -Pattern $b.Pattern
+  if($urls -and $urls.Count){
+    $name = [IO.Path]::GetFileName(($urls[0] -split '\?')[0])
+    $out = Join-Path $TempDir $name
+    if(Download-File -Urls $urls -OutFile $out){
+      if(Install-One -SrcPath $out -Fallback $b.Name){ $installed++ }
     }
+  } else {
+    Say ("API could not resolve (boost): {0}/{1}/{2}" -f $b.Owner,$b.Repo,$b.Path) "Red" "ERROR"
+  }
 }
 
-# Tiếp tục xử lý các font từ danh sách đã chọn
-foreach($t in $familyPick) {
-  $fam = $t.Fam  # Tên font gia đình
-  $urls = Resolve-FontTTF $fam  # Lấy URL font gia đình
-  if ($urls -and $urls.Count) {
-    $fname = [IO.Path]::GetFileName((($urls[0] -split '\?')[0]))  # Lấy tên file
-    if (-not $fname.EndsWith(".ttf") -and -not $fname.EndsWith(".otf")) {
-      $fname = ($fam -replace '\s','') + ".ttf"  # Đảm bảo phần mở rộng là .ttf
+# Cài các font gia đình đã chọn
+foreach($t in $familyPick){
+  $fam = $t.Fam
+  $urls = Resolve-FontTTF $fam
+  if($urls -and $urls.Count){
+    $fname = [IO.Path]::GetFileName((($urls[0] -split '\?')[0]))
+    if(-not $fname.EndsWith(".ttf") -and -not $fname.EndsWith(".otf")){
+      $fname = ($fam -replace '\s','') + ".ttf"
     }
-    $out = Join-Path $TempDir $fname  # Đường dẫn lưu font
-    # Tải và cài đặt font
-    if (Download-File -Urls $urls -OutFile $out) {
-      if (Install-One -SrcPath $out -Fallback $fam) {
-        $installed++  # Tăng số lượng font đã cài
-      }
+    $out = Join-Path $TempDir $fname
+    if(Download-File -Urls $urls -OutFile $out){
+      if(Install-One -SrcPath $out -Fallback $fam){ $installed++ }
     } else {
-      # Nếu tải xuống không thành công
       Say ("Download failed via API: {0}" -f $fam) "Red" "ERROR"
     }
   } else {
-    # Nếu không tìm thấy font
     Say ("API could not resolve: {0}" -f $fam) "Red" "ERROR"
   }
 }
 
-# Bổ sung duplicate font nếu không đủ số lượng để thay đổi InventoryHash
-if ($installed -lt [Math]::Max(3, [Math]::Floor($target/3))) {
+# Bơm duplicate nếu thiếu để tăng xác suất đổi InventoryHash
+if($installed -lt [Math]::Max(3,[Math]::Floor($target/3)]){
   $owned = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
-  if ($owned) {
-    if ($owned -is [string]) { $owned = @($owned) }
-    $dupCount = [Math]::Min(3, $owned.Count)  # Tạo ra tối đa 3 bản sao
-    foreach ($f in ($owned | Get-Random -Count $dupCount)) {
+  if($owned){
+    if($owned -is [string]){ $owned=@($owned) }
+    $dupCount = [Math]::Min(3, $owned.Count)
+    foreach($f in ($owned | Get-Random -Count $dupCount)){
       $src = Join-Path $FontsDir $f
-      if (Test-Path $src) {
+      if(Test-Path $src){
         $new = ([IO.Path]::GetFileNameWithoutExtension($f)) + ("-{0}.ttf" -f (Get-Random -Minimum 1000 -Maximum 9999))
         $dst = Join-Path $FontsDir $new
         try {
           Copy-Item $src $dst -Force
-          $reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+          $reg="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
           $face = Get-FontFace $dst
           $key = ("{0} (TrueType)" -f $face)
           New-ItemProperty -Path $reg -Name $key -Value $new -PropertyType String -Force | Out-Null
           $owned2 = (Get-ItemProperty -Path $StateKey -Name "Owned" -ErrorAction SilentlyContinue).Owned
-          if (-not $owned2) { $owned2 = @() } elseif ($owned2 -is [string]) { $owned2 = @($owned2) }
+          if(-not $owned2){ $owned2=@() } elseif($owned2 -is [string]){ $owned2=@($owned2) }
           $owned2 = $owned2 + $new | Select-Object -Unique
           New-ItemProperty -Path $StateKey -Name "Owned" -Value $owned2 -PropertyType MultiString -Force | Out-Null
           Say ("Synthesized duplicate: {0}" -f $new) "Yellow"
