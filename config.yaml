@@ -1,23 +1,23 @@
 port: 7890
 socks-port: 7891
-mode: global
 allow-lan: false
+mode: Rule
 log-level: info
 
 proxies:
-  - name: My-SOCKS5
+  - name: "MySOCKS5"
     type: socks5
     server: 217.177.34.19
     port: 6012
     username: eyvizq4mf8n3
     password: 6jo0C8dNSfrtkclt
-    udp: true
+    udp: true   # ép UDP đi qua tun2socks (dù proxy chỉ TCP)
 
 proxy-groups:
-  - name: Proxy
+  - name: "Proxy"
     type: select
     proxies:
-      - My-SOCKS5
+      - "MySOCKS5"
       - DIRECT
 
 rules:
