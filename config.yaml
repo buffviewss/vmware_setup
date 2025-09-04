@@ -11,7 +11,7 @@ proxies:
     port: 6012
     username: eyvizq4mf8n3
     password: 6jo0C8dNSfrtkclt
-    udp: true   # ép UDP đi qua tun2socks (dù proxy chỉ TCP)
+    udp: true
 
 proxy-groups:
   - name: "Proxy"
@@ -22,3 +22,15 @@ proxy-groups:
 
 rules:
   - MATCH,Proxy
+
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  fallback:
+    - 9.9.9.9
+    - 8.8.4.4
