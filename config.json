@@ -1,0 +1,56 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "cloudflare",
+        "address": "1.1.1.1",
+        "address_resolver": "local"
+      },
+      {
+        "tag": "google",
+        "address": "8.8.8.8",
+        "address_resolver": "local"
+      }
+    ],
+    "strategy": "ipv4_only",
+    "independent_cache": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "inet4_address": "10.0.0.2/24",
+      "inet6_address": "fdfe:dcba:9876::2/126",
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "system",
+      "sniff": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "server": "217.177.34.19",
+      "server_port": 6012,
+      "username": "eyvizq4mf8n3",
+      "password": "6jo0C8dNSfrtkclt",
+      "udp_over_tcp": true,
+      "tag": "socks-proxy"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "outbound": "socks-proxy",
+        "network": "tcp,udp"
+      }
+    ],
+    "final": "socks-proxy"
+  }
+}
