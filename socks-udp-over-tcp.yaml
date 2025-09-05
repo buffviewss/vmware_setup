@@ -1,0 +1,59 @@
+port: 7890
+socks-port: 0
+redir-port: 0
+mixed-port: 0
+allow-lan: true
+mode: Rule
+log-level: info
+external-controller: 0.0.0.0:9090
+ipv6: false
+
+proxies:
+  - name: socks-proxy
+    type: socks5
+    server: 217.177.34.19
+    port: 6012
+    username: eyvizq4mf8n3
+    password: 6jo0C8dNSfrtkclt
+    udp: true              # Clash nhận UDP
+    udp-over-tcp: true     # bọc UDP → TCP gửi qua SOCKS (TCP-only)
+
+proxy-groups:
+  - name: FINAL
+    type: select
+    proxies: [socks-proxy, DIRECT]
+
+rules:
+  # bypass nội bộ để in LAN/NAS mượt
+  - DOMAIN-SUFFIX,lan,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,172.16.0.0/12,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - MATCH,FINAL
+
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  strict-route: true
+  auto-detect-interface: true
+  dns-hijack: [any:53]     # kéo toàn bộ DNS vào Mihomo (không chặn UDP)
+
+sniffer:
+  enable: true
+  sniffing: [tls, http]
+  force-dns-mapping: true
+  parse-pure-ip: true
+
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip   # ổn định cho TUN
+  listen: 0.0.0.0:1053
+  default-nameserver: [1.1.1.1, 8.8.8.8]
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://dns.google/dns-query
+  fallback: []
+  fallback-filter: { geoip: true, ipcidr: [0.0.0.0/32] }
