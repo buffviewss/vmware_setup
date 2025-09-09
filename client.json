@@ -1,0 +1,56 @@
+{
+  "log": { "level": "info" },
+
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "sb-tun0",
+      "mtu": 1400,
+      "auto_route": true,
+      "stack": "gvisor",
+      "inet4_address": ["10.255.0.1/30"],
+      "endpoint_independent_nat": true
+    }
+  ],
+
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "socks-out",
+      "server": "SOCKS_IP",
+      "server_port": SOCKS_PORT,
+      "version": "5"
+      /* Nếu SOCKS có user/pass thì thêm:
+      ,"username": "USER", "password": "PASS"
+      */
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+
+  "dns": {
+    "servers": [
+      { "tag": "doh", "address": "https://dns.google/dns-query", "detour": "socks-out" }
+    ],
+    "strategy": "prefer_ipv4",
+    "rules": [ { "server": "doh" } ]
+  },
+
+  "route": {
+    "rules": [
+      /* Bypass chính SOCKS và các mạng nội bộ để tránh vòng lặp */
+      { "outbound": "direct",
+        "ip_cidr": [
+          "SOCKS_IP/32",
+          "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+          "127.0.0.0/8"
+          /* nếu LAN pfSense là 10.10.0.0/24 thì thêm "10.10.0.0/24" */
+        ]
+      },
+      /* Toàn bộ UDP (WebRTC/QUIC/STUN) đi direct -> IP VPS */
+      { "protocol": "udp", "outbound": "direct" }
+    ],
+    /* Mặc định mọi thứ còn lại (TCP) đi SOCKS */
+    "final": "socks-out"
+  }
+}
