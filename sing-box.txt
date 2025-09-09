@@ -1,0 +1,125 @@
+# ==== hằng số ====
+SB_HOST="217.180.44.121"
+SB_PORT="6012"
+SB_USER="eyvizq4mf8n3"
+SB_PASS="6jo0C8dNSfrtkclt"
+
+SB_CONF="/etc/sing-box/config.json"
+SB_BIN="/usr/bin/sing-box"
+DNSMASQ="/etc/init.d/dnsmasq"
+HDP="/etc/init.d/https-dns-proxy"
+
+# ===== script: sb-proxy-on =====
+cat > /usr/bin/sb-proxy-on <<'EOS'
+#!/bin/sh
+set -e
+SB_HOST="217.180.44.121"; SB_PORT="6012"
+SB_CONF="/etc/sing-box/config.json"; SB_BIN="/usr/bin/sing-box"
+DNSMASQ="/etc/init.d/dnsmasq"; HDP="/etc/init.d/https-dns-proxy"
+
+say(){ printf "%s\n" "$*"; }
+
+# 0) Kiểm tra cổng SOCKS trước khi ép
+if /usr/bin/curl -v --connect-timeout 3 "http://$SB_HOST:$SB_PORT" >/dev/null 2>&1; then
+  say "[OK] SOCKS PORT OPEN $SB_HOST:$SB_PORT"
+else
+  say "[X] SOCKS PORT CLOSED/TIMEOUT – giữ DIRECT, dừng."
+  exit 1
+fi
+
+# 1) Đảm bảo https-dns-proxy có cấu hình gọn (5053 + 5054) & chạy
+if [ ! -f /etc/config/https-dns-proxy ]; then
+  cat > /etc/config/https-dns-proxy <<'EOF'
+config https-dns-proxy 'config'
+	option update_servers '0'
+config https-dns-proxy
+	option listen_addr '127.0.0.1'
+	option listen_port '5053'
+	option resolver_url 'https://1.1.1.1/dns-query'
+	option bootstrap_dns '1.1.1.1,1.0.0.1'
+config https-dns-proxy
+	option listen_addr '127.0.0.1'
+	option listen_port '5054'
+	option resolver_url 'https://8.8.8.8/dns-query'
+	option bootstrap_dns '8.8.8.8,8.8.4.4'
+EOF
+fi
+$HDP enable >/dev/null 2>&1 || true
+# tránh “Address in use”: stop/kill pid cũ rồi start lại
+$HDP stop >/dev/null 2>&1 || true
+killall -9 https-dns-proxy 2>/dev/null || true
+rm -f /var/run/https-dns-proxy*.pid 2>/dev/null || true
+$HDP start
+sleep 1
+
+# 2) Trỏ dnsmasq -> 127.0.0.1#5053 (DoH)
+[ -f /etc/config/dhcp.singbox.bak ] || cp /etc/config/dhcp /etc/config/dhcp.singbox.bak
+uci set dhcp.@dnsmasq[0].port='53'
+uci set dhcp.@dnsmasq[0].localservice='0'
+uci -q delete dhcp.@dnsmasq[0].server
+uci set dhcp.@dnsmasq[0].noresolv='1'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
+uci commit dhcp
+$DNSMASQ restart
+
+# 3) Ép route qua proxy
+sed -i -E 's/"final"\s*:\s*"(direct|socks-proxy)"/"final":"socks-proxy"/' "$SB_CONF"
+/etc/init.d/sing-box restart
+sleep 1
+
+# 4) Kiểm tra nhanh
+/usr/bin/curl -4s https://api.ipify.org 2>/dev/null | sed 's/^/[IP]/'
+nslookup openwrt.org 127.0.0.1 >/dev/null && echo "[DNS] OK via DoH" || echo "[DNS] FAIL"
+EOS
+chmod +x /usr/bin/sb-proxy-on
+
+# ===== script: sb-direct-on =====
+cat > /usr/bin/sb-direct-on <<'EOS'
+#!/bin/sh
+set -e
+SB_CONF="/etc/sing-box/config.json"
+DNSMASQ="/etc/init.d/dnsmasq"; HDP="/etc/init.d/https-dns-proxy"
+
+# 1) Trả route về direct
+sed -i -E 's/"final"\s*:\s*"(direct|socks-proxy)"/"final":"direct"/' "$SB_CONF"
+/etc/init.d/sing-box restart
+
+# 2) Trả dnsmasq về mặc định (không dùng DoH)
+if [ -f /etc/config/dhcp.singbox.bak ]; then
+  cp /etc/config/dhcp.singbox.bak /etc/config/dhcp
+else
+  uci delete dhcp.@dnsmasq[0].noresolv 2>/dev/null || true
+  uci delete dhcp.@dnsmasq[0].server  2>/dev/null || true
+  uci set dhcp.@dnsmasq[0].port='53'
+  uci set dhcp.@dnsmasq[0].localservice='0'
+  uci commit dhcp
+fi
+$DNSMASQ restart
+
+# 3) (tuỳ chọn) dừng https-dns-proxy để nhẹ máy
+$HDP stop >/dev/null 2>&1 || true
+
+# 4) Test nhanh
+/usr/bin/curl -4s https://api.ipify.org 2>/dev/null | sed 's/^/[IP]/'
+EOS
+chmod +x /usr/bin/sb-direct-on
+
+# ===== script: sb-health =====
+cat > /usr/bin/sb-health <<'EOS'
+#!/bin/sh
+echo "== sing-box =="
+pgrep -a sing-box || echo "(no process)"
+echo "== sb-tun =="
+ip addr show dev sb-tun 2>/dev/null || echo "(no sb-tun)"
+echo "== https-dns-proxy listeners =="
+netstat -lnp 2>/dev/null | grep -E '127\.0\.0\.1:(5053|5054)' || echo "(no 5053/5054)"
+echo "== dnsmasq listeners (:53) =="
+netstat -lnp 2>/dev/null | grep -E '(:53\s)|(:53$)' || echo "(no :53)"
+echo "== ipify =="
+/usr/bin/curl -4s https://api.ipify.org || true; printf "\n"
+echo "== tail logs =="
+echo "-- sing-box --"; logread -e sing-box | tail -n 30
+echo "-- dnsmasq --"; logread -e dnsmasq | tail -n 20
+echo "-- https-dns-proxy --"; logread -e https-dns-proxy | tail -n 20
+EOS
+chmod +x /usr/bin/sb-health
