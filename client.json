@@ -18,11 +18,11 @@
     {
       "type": "socks",
       "tag": "socks-out",
-      "server": "SOCKS_IP",
-      "server_port": SOCKS_PORT,
+      "server": "217.180.44.121",
+      "server_port": 6012,
       "version": "5"
       /* Nếu SOCKS có user/pass thì thêm:
-      ,"username": "USER", "password": "PASS"
+      ,"username": "eyvizq4mf8n3", "password": "6jo0C8dNSfrtkclt"
       */
     },
     { "type": "direct", "tag": "direct" }
