@@ -1,0 +1,61 @@
+# ==== Ports & basics ====
+mixed-port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: info
+
+# ==== TUN (tương đương inbound type:tun + sniff:true) ====
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  strict-route: true
+  auto-detect-interface: true
+
+sniffer:
+  enable: true
+  sniffing:
+    - tls
+    - http
+  force-domain:
+    - +.googlevideo.com
+
+# ==== DNS (ipv4_only ~ ipv6:false) ====
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  listen: 0.0.0.0:53
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  fallback:
+    - 9.9.9.9
+    - 8.8.4.4
+
+# ==== Outbounds -> proxies ====
+proxies:
+  - name: "socks-proxy"
+    type: socks5
+    server: 217.180.44.121
+    port: 6012
+    username: eyvizq4mf8n3
+    password: 6jo0C8dNSfrtkclt
+    udp: true
+    udp-over-tcp: true     # tương đương "udp_over_tcp.enabled": true
+
+  - name: "DIRECT"
+    type: direct
+
+# ==== Routing ====
+proxy-groups:
+  - name: "Proxy"
+    type: select
+    proxies:
+      - "socks-proxy"
+      - "DIRECT"
+
+rules:
+  - MATCH,Proxy
