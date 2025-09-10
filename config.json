@@ -23,7 +23,7 @@
   "outbounds": [
     {
       "type": "socks",
-      "server": "217.177.34.19",
+      "server": "217.180.44.121",
       "server_port": 6012,
       "username": "eyvizq4mf8n3",
       "password": "6jo0C8dNSfrtkclt",
