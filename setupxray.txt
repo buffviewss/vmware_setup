@@ -1,0 +1,32 @@
+{
+  "inbounds": [
+    {
+      "port": 1080,  // Cổng mà Xray sẽ lắng nghe
+      "listen": "0.0.0.0",
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",  // Bạn không cần xác thực nếu không có username/password
+        "udp": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "217.180.44.121",  // Địa chỉ của SOCKS5 proxy bạn đã mua
+            "port": 6012,  // Cổng SOCKS5
+            "users": [
+              {
+                "user": "eyvizq4mf8n3",  // Username SOCKS5
+                "pass": "6jo0C8dNSfrtkclt"  // Password SOCKS5
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
