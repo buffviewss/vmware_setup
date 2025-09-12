@@ -421,7 +421,7 @@ function Prepend-Link { param([string]$Base,[string[]]$Pairs)
       if($cur -is [string]){ $cur=@($cur) }
       $new=($Pairs + $cur) | Select-Object -Unique
       New-ItemProperty -Path $key -Name $Base -Value $new -PropertyType MultiString -Force | Out-Null
-      Log ("SystemLink [{0}] ({1}) <= {2}" -f $Base,$root,($Pairs -join ' | '))
+      Log ("SystemLink [{0}] ({1}) <= {2}" -f $Base,$root,($Pairs - join ' | '))
     } catch { Say ("Prepend error {0}/{1}: {2}" -f $Base,$root,$_.Exception.Message) "Red" "ERROR" }
   }
 }
@@ -615,6 +615,8 @@ if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){   # đúng
   if($emoji){ Prepend-Link -Base "Segoe UI Emoji"  -Pairs @($emoji.Pair); }
   foreach($root in @('HKLM','HKCU')){
     $sub=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
+    # Thêm dòng này để tạo key nếu chưa có
+    if (!(Test-Path $sub)) { try { New-Item -Path $sub -Force | Out-Null } catch {} }
     if($sans){  New-ItemProperty -Path $sub -Name "Segoe UI" -Value $sans.Face -PropertyType String -Force | Out-Null
                 New-ItemProperty -Path $sub -Name "Arial"    -Value $sans.Face -PropertyType String -Force | Out-Null }
     if($serif){ New-ItemProperty -Path $sub -Name "Times New Roman" -Value $serif.Face -PropertyType String -Force | Out-Null
