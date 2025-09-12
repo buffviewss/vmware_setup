@@ -421,7 +421,7 @@ function Prepend-Link { param([string]$Base,[string[]]$Pairs)
       if($cur -is [string]){ $cur=@($cur) }
       $new=($Pairs + $cur) | Select-Object -Unique
       New-ItemProperty -Path $key -Name $Base -Value $new -PropertyType MultiString -Force | Out-Null
-      Log ("SystemLink [{0}] ({1}) <= {2}" -f $Base,$root,($Pairs - join ' | '))
+      Log ("SystemLink [{0}] ({1}) <= {2}" -f $Base,$root,($Pairs -join ' | '))
     } catch { Say ("Prepend error {0}/{1}: {2}" -f $Base,$root,$_.Exception.Message) "Red" "ERROR" }
   }
 }
