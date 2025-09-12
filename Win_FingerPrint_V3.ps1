@@ -615,7 +615,7 @@ if($installed -lt [Math]::Max(3,[Math]::Floor($target/3))){   # đúng
   if($emoji){ Prepend-Link -Base "Segoe UI Emoji"  -Pairs @($emoji.Pair); }
   foreach($root in @('HKLM','HKCU')){
     $sub=("{0}:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes" -f $root)
-    # Thêm dòng này để tạo key nếu chưa có
+    # Tạo key nếu chưa có (fix lỗi đỏ trên Win 10/11)
     if (!(Test-Path $sub)) { try { New-Item -Path $sub -Force | Out-Null } catch {} }
     if($sans){  New-ItemProperty -Path $sub -Name "Segoe UI" -Value $sans.Face -PropertyType String -Force | Out-Null
                 New-ItemProperty -Path $sub -Name "Arial"    -Value $sans.Face -PropertyType String -Force | Out-Null }
