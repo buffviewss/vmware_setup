@@ -11,9 +11,9 @@ uci commit network
 
 # Kiểm tra xem lệnh đã thực hiện thành công hay chưa
 if [ $? -eq 0 ]; then
-    echo "Lệnh WAN đã thành công!"
+    echo " WAN Completed!"
 else
-    echo "Lỗi khi thiết lập WAN."
+    echo "Error WAN."
     exit 1
 fi
 
@@ -27,9 +27,9 @@ uci commit network
 
 # Kiểm tra lệnh LAN
 if [ $? -eq 0 ]; then
-    echo "Lệnh LAN đã thành công!"
+    echo "LAN Completed!"
 else
-    echo "Lỗi khi thiết lập LAN."
+    echo "Error LAN."
     exit 1
 fi
 
@@ -42,9 +42,9 @@ uci commit dhcp
 
 # Kiểm tra lệnh DHCP
 if [ $? -eq 0 ]; then
-    echo "Lệnh DHCP đã thành công!"
+    echo "DHCP Completed!"
 else
-    echo "Lỗi khi bật DHCP."
+    echo "Error DHCP."
     exit 1
 fi
 
@@ -60,9 +60,9 @@ uci commit network; uci commit dhcp
 
 # Kiểm tra lệnh tắt IPv6
 if [ $? -eq 0 ]; then
-    echo "Lệnh tắt IPv6 đã thành công!"
+    echo "Disabled IPv6 Completed!"
 else
-    echo "Lỗi khi tắt IPv6."
+    echo "Error IPv6."
     exit 1
 fi
 
@@ -72,9 +72,9 @@ fi
 
 # Kiểm tra lệnh SSH
 if [ $? -eq 0 ]; then
-    echo "SSH đã được bật thành công!"
+    echo "SSH Enabled Completed!"
 else
-    echo "Lỗi khi bật SSH."
+    echo "Error SSH."
     exit 1
 fi
 
