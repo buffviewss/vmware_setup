@@ -40,5 +40,5 @@ uci commit network; uci commit dhcp
 
 # Thông báo sau khi script chạy thành công
 LAN_IP=$(uci get network.lan.ipaddr)
-echo "Script đã hoàn thành thành công!"
-echo "IP LAN của bạn là: $LAN_IP"
+echo "Script completed!"
+echo "Your IP LAN : $LAN_IP"
