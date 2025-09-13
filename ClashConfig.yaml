@@ -10,8 +10,8 @@ proxies:
     type: socks5
     server: 185.100.170.239
     port: 52743
-    username: eyvizq4mf8n3
-    password: 6jo0C8dNSfrtkclt
+    username: VpvasmYp65hDU9t
+    password: S2aOw7QhmoTO3eg
     udp: true
 
 proxy-groups:
