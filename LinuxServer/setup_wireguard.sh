@@ -1,50 +1,56 @@
 #!/bin/bash
 
+# Dừng ngay khi gặp lỗi và ghi lại log chi tiết
+set -e
+
+LOG_FILE="/var/log/setup_wireguard.log"
+echo "==================== Bắt đầu cài đặt ====================" | tee -a $LOG_FILE
+
 # =============================
 # Thông số cần thay đổi
 # =============================
 
 # Cấu hình SOCKS5 Proxy
-SOCKS_PROXY_IP="185.100.170.239"
-SOCKS_PROXY_PORT="52743"
-SOCKS_PROXY_USER="VpvasmYp65hDU9t"   # Nếu không có, để trống
-SOCKS_PROXY_PASS="S2aOw7QhmoTO3eg"   # Nếu không có, để trống
+SOCKS_PROXY_IP="YOUR_PROXY_IP"
+SOCKS_PROXY_PORT="YOUR_PROXY_PORT"
+SOCKS_PROXY_USER="YOUR_PROXY_USER"   # Nếu không có, để trống
+SOCKS_PROXY_PASS="YOUR_PROXY_PASS"   # Nếu không có, để trống
 
 # Cấu hình WireGuard Peer (Client/Server)
-WG_PUBLIC_KEY="SF0jKj8CcRlJbJCTbnT88OItQa34QhE8TsMAg9TsmW4="
-WG_PEER_IP="Vyzs6K4oF4pI7M3qkml3wq6CwY4p9BcbHkFbWrg3Fmg="
+WG_PUBLIC_KEY="<peer_public_key_here>"
+WG_PEER_IP="<peer_ip_here>"
 
 # =============================
 # Cài đặt và cấu hình bắt đầu
 # =============================
 
 # Cập nhật hệ thống và cài đặt các gói cần thiết
-echo "Cập nhật hệ thống..."
-sudo apt update -y
-sudo apt upgrade -y
-sudo apt install -y wireguard proxychains git build-essential cmake make libssl-dev curl iptables iproute2
+echo "Cập nhật hệ thống..." | tee -a $LOG_FILE
+sudo apt update -y | tee -a $LOG_FILE
+sudo apt upgrade -y | tee -a $LOG_FILE
+sudo apt install -y wireguard proxychains git build-essential cmake make libssl-dev curl iptables iproute2 | tee -a $LOG_FILE
 
 # Cài đặt sing-box
-echo "Cài đặt sing-box..."
+echo "Cài đặt sing-box..." | tee -a $LOG_FILE
 cd /opt
-git clone https://github.com/sagernet/sing-box.git
+git clone https://github.com/sagernet/sing-box.git | tee -a $LOG_FILE
 cd sing-box
-make
+make | tee -a $LOG_FILE
 
 # Cài đặt WireGuard
-echo "Cài đặt WireGuard..."
-sudo apt install -y wireguard-tools
+echo "Cài đặt WireGuard..." | tee -a $LOG_FILE
+sudo apt install -y wireguard-tools | tee -a $LOG_FILE
 
 # Cấu hình ProxyChains
-echo "Cấu hình ProxyChains..."
-sudo sed -i "s/socks4 127.0.0.1 9050/socks5 $SOCKS_PROXY_IP $SOCKS_PROXY_PORT/" /etc/proxychains.conf
+echo "Cấu hình ProxyChains..." | tee -a $LOG_FILE
+sudo sed -i "s/socks4 127.0.0.1 9050/socks5 $SOCKS_PROXY_IP $SOCKS_PROXY_PORT/" /etc/proxychains.conf | tee -a $LOG_FILE
 # Nếu proxy yêu cầu user:pass, thêm:
 if [ ! -z "$SOCKS_PROXY_USER" ] && [ ! -z "$SOCKS_PROXY_PASS" ]; then
-  sudo sed -i "s/socks5 127.0.0.1 9050/socks5 $SOCKS_PROXY_USER:$SOCKS_PROXY_PASS@$SOCKS_PROXY_IP $SOCKS_PROXY_PORT/" /etc/proxychains.conf
+  sudo sed -i "s/socks5 127.0.0.1 9050/socks5 $SOCKS_PROXY_USER:$SOCKS_PROXY_PASS@$SOCKS_PROXY_IP $SOCKS_PROXY_PORT/" /etc/proxychains.conf | tee -a $LOG_FILE
 fi
 
 # Tạo cấu hình WireGuard
-echo "Tạo file cấu hình WireGuard wg0.conf..."
+echo "Tạo file cấu hình WireGuard wg0.conf..." | tee -a $LOG_FILE
 cat <<EOT > /etc/wireguard/wg0.conf
 [Interface]
 PrivateKey = $(wg genkey)
@@ -60,10 +66,11 @@ PersistentKeepalive = 25
 EOT
 
 # Cấp quyền cho file cấu hình WireGuard
-sudo chmod 600 /etc/wireguard/wg0.conf
+echo "Cấp quyền cho file cấu hình WireGuard..." | tee -a $LOG_FILE
+sudo chmod 600 /etc/wireguard/wg0.conf | tee -a $LOG_FILE
 
 # Cài đặt cấu hình sing-box để sử dụng tun2socks và chuyển UDP qua SOCKS5
-echo "Cấu hình sing-box..."
+echo "Cấu hình sing-box..." | tee -a $LOG_FILE
 cat <<EOT > /etc/sing-box.json
 {
   "log": { "level": "info" },
@@ -104,12 +111,15 @@ cat <<EOT > /etc/sing-box.json
 EOT
 
 # Khởi động sing-box
-echo "Khởi động sing-box..."
-/opt/sing-box/sing-box run -c /etc/sing-box.json &
+echo "Khởi động sing-box..." | tee -a $LOG_FILE
+/opt/sing-box/sing-box run -c /etc/sing-box.json & | tee -a $LOG_FILE
 
 # Kết nối WireGuard qua ProxyChains
-echo "Kết nối WireGuard qua ProxyChains..."
-sudo proxychains wg-quick up wg0
+echo "Kết nối WireGuard qua ProxyChains..." | tee -a $LOG_FILE
+sudo proxychains wg-quick up wg0 | tee -a $LOG_FILE
 
 # Kiểm tra kết nối
-wg show
+echo "Kiểm tra kết nối WireGuard..." | tee -a $LOG_FILE
+wg show | tee -a $LOG_FILE
+
+echo "==================== Cài đặt hoàn tất ====================" | tee -a $LOG_FILE
