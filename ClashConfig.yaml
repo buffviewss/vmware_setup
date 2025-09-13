@@ -8,10 +8,10 @@ log-level: info
 proxies:
   - name: "MySOCKS5"
     type: socks5
-    server: 185.100.170.239
-    port: 52743
-    username: VpvasmYp65hDU9t
-    password: S2aOw7QhmoTO3eg
+    server: 154.62.174.66
+    port: 6012
+    username: eyvizq4mf8n3
+    password: 6jo0C8dNSfrtkclt
     udp: true
 
 proxy-groups:
