@@ -1,5 +1,23 @@
 #!/bin/bash
 
+# =============================
+# Thông số cần thay đổi
+# =============================
+
+# Cấu hình SOCKS5 Proxy
+SOCKS_PROXY_IP="185.100.170.239"
+SOCKS_PROXY_PORT="52743"
+SOCKS_PROXY_USER="VpvasmYp65hDU9t"   # Nếu không có, để trống
+SOCKS_PROXY_PASS="S2aOw7QhmoTO3eg"   # Nếu không có, để trống
+
+# Cấu hình WireGuard Peer (Client/Server)
+WG_PUBLIC_KEY="SF0jKj8CcRlJbJCTbnT88OItQa34QhE8TsMAg9TsmW4="
+WG_PEER_IP="Vyzs6K4oF4pI7M3qkml3wq6CwY4p9BcbHkFbWrg3Fmg="
+
+# =============================
+# Cài đặt và cấu hình bắt đầu
+# =============================
+
 # Cập nhật hệ thống và cài đặt các gói cần thiết
 echo "Cập nhật hệ thống..."
 sudo apt update -y
@@ -19,9 +37,11 @@ sudo apt install -y wireguard-tools
 
 # Cấu hình ProxyChains
 echo "Cấu hình ProxyChains..."
-sudo sed -i 's/socks4 127.0.0.1 9050/socks5 YOUR_PROXY_IP YOUR_PROXY_PORT/' /etc/proxychains.conf
+sudo sed -i "s/socks4 127.0.0.1 9050/socks5 $SOCKS_PROXY_IP $SOCKS_PROXY_PORT/" /etc/proxychains.conf
 # Nếu proxy yêu cầu user:pass, thêm:
-# sudo sed -i 's/socks5 127.0.0.1 9050/socks5 user:pass@YOUR_PROXY_IP YOUR_PROXY_PORT/' /etc/proxychains.conf
+if [ ! -z "$SOCKS_PROXY_USER" ] && [ ! -z "$SOCKS_PROXY_PASS" ]; then
+  sudo sed -i "s/socks5 127.0.0.1 9050/socks5 $SOCKS_PROXY_USER:$SOCKS_PROXY_PASS@$SOCKS_PROXY_IP $SOCKS_PROXY_PORT/" /etc/proxychains.conf
+fi
 
 # Tạo cấu hình WireGuard
 echo "Tạo file cấu hình WireGuard wg0.conf..."
@@ -33,9 +53,9 @@ ListenPort = 51820
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = <peer_public_key_here>
+PublicKey = $WG_PUBLIC_KEY
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = <peer_ip_here>:51820
+Endpoint = $WG_PEER_IP:51820
 PersistentKeepalive = 25
 EOT
 
@@ -59,11 +79,11 @@ cat <<EOT > /etc/sing-box.json
   "outbounds": [
     {
       "type": "socks",
-      "server": "YOUR_PROXY_IP",
-      "server_port": YOUR_PROXY_PORT,
+      "server": "$SOCKS_PROXY_IP",
+      "server_port": $SOCKS_PROXY_PORT,
       "version": "5",
-      "username": "YOUR_PROXY_USER",
-      "password": "YOUR_PROXY_PASS",
+      "username": "$SOCKS_PROXY_USER",
+      "password": "$SOCKS_PROXY_PASS",
       "udp_over_tcp": false,
       "tag": "socks"
     },
@@ -73,7 +93,7 @@ cat <<EOT > /etc/sing-box.json
     "rules": [
       {
         "protocol": ["udp"],
-        "ip_cidr": ["<wireguard_server_ip>/32"],
+        "ip_cidr": ["$WG_PEER_IP/32"],
         "port": [51820],
         "outbound": "socks"
       }
