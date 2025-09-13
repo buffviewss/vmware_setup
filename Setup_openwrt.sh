@@ -11,7 +11,7 @@ uci commit network
 
 # Kiểm tra xem lệnh đã thực hiện thành công hay chưa
 if [ $? -eq 0 ]; then
-    echo " WAN Completed!"
+    echo "WAN Completed!"
 else
     echo "Error WAN."
     exit 1
