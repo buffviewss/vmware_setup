@@ -11,14 +11,14 @@ echo "==================== Bắt đầu cài đặt ====================" | tee 
 # =============================
 
 # Cấu hình SOCKS5 Proxy
-SOCKS_PROXY_IP="YOUR_PROXY_IP"
-SOCKS_PROXY_PORT="YOUR_PROXY_PORT"
-SOCKS_PROXY_USER="YOUR_PROXY_USER"   # Nếu không có, để trống
-SOCKS_PROXY_PASS="YOUR_PROXY_PASS"   # Nếu không có, để trống
+SOCKS_PROXY_IP="185.100.170.239"
+SOCKS_PROXY_PORT="52743"
+SOCKS_PROXY_USER="VpvasmYp65hDU9t"   # Nếu không có, để trống
+SOCKS_PROXY_PASS="S2aOw7QhmoTO3eg"   # Nếu không có, để trống
 
 # Cấu hình WireGuard Peer (Client/Server)
-WG_PUBLIC_KEY="<peer_public_key_here>"
-WG_PEER_IP="<peer_ip_here>"
+WG_PUBLIC_KEY="SF0jKj8CcRlJbJCTbnT88OItQa34QhE8TsMAg9TsmW4="
+WG_PEER_IP="Vyzs6K4oF4pI7M3qkml3wq6CwY4p9BcbHkFbWrg3Fmg="
 
 # =============================
 # Cài đặt và cấu hình bắt đầu
