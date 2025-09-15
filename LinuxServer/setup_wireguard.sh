@@ -42,7 +42,7 @@ SB_TUN6="fd00:0:0:1::1/126"
 CLIENT_NAME="android"
 
 # --- File/đường dẫn ---
-LOG_FILE="/var/log/ovpn_socks_gateway.log"
+LOG_FILE="/tmp/setup_wireguard.log"  # Sử dụng /tmp để tránh vấn đề quyền
 EASYRSA_DIR="/etc/openvpn/easy-rsa"
 OVPN_SERVER_DIR="/etc/openvpn/server"
 OVPN_CLIENT_OUT="/root/${CLIENT_NAME}.ovpn"
