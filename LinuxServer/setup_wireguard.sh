@@ -22,11 +22,11 @@ OVPN_DNS2="8.8.8.8"                # DNS đẩy về client
 OVPN_TUN_IF="tun0"                 # tên interface OpenVPN server mặc định
 
 # --- SOCKS5 (ra Internet) ---
-SOCKS_IP="1.2.3.4"
-SOCKS_PORT="1080"
-SOCKS_USER=""                      # "" nếu không cần
-SOCKS_PASS=""                      # "" nếu không cần
-SOCKS_UDP_OVER_TCP="false"         # true nếu proxy KHÔNG hỗ trợ UDP Associate
+SOCKS_IP="185.100.170.239"
+SOCKS_PORT="52743"
+SOCKS_USER="VpvasmYp65hDU9t"                      # "" nếu không cần
+SOCKS_PASS="S2aOw7QhmoTO3eg"                      # "" nếu không cần
+SOCKS_UDP_OVER_TCP="true"         # true nếu proxy KHÔNG hỗ trợ UDP Associate
 
 # --- sing-box binary ---
 SINGBOX_VERSION="1.8.13"
