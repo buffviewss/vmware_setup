@@ -76,7 +76,31 @@ if [[ "$ENABLE_IPV6" == "true" ]]; then
 fi
 
 # =========================
-# [6] EASY-RSA: PKI & KEYS
+# [6] TẠO FILE VARS (CẬP NHẬT COMMONNAME)
+# =========================
+echo "Tạo file vars cho EasyRSA..."
+cat > /etc/openvpn/easy-rsa/vars <<EOF
+# EasyRSA variables
+export EASYRSA_BATCH="1"      # Tắt các câu hỏi xác nhận
+export EASYRSA_REQ_CN="server" # commonName cho server certificate
+export EASYRSA_REQ_COUNTRY="GB"
+export EASYRSA_REQ_PROVINCE="London"
+export EASYRSA_REQ_CITY="London"
+export EASYRSA_REQ_ORG="MyOrg"
+export EASYRSA_REQ_EMAIL="iaernaoe@uk.com"
+export EASYRSA_REQ_OU="MyOrgUnit"
+export EASYRSA_KEY_SIZE=2048   # Kích thước khóa RSA (2048-bit)
+export EASYRSA_ALGO="rsa"     # Thuật toán khóa RSA
+export EASYRSA_CA_EXPIRE=3650 # Thời gian hết hạn chứng chỉ CA (10 năm)
+export EASYRSA_CERT_EXPIRE=3650 # Thời gian hết hạn chứng chỉ (10 năm)
+
+# Set the OpenVPN-related default parameters
+export EASYRSA_DEFAULT_NICKNAME="server" # Tên chứng chỉ cho server
+export EASYRSA_DEFAULT_KEY_SIZE=2048
+EOF
+
+# =========================
+# [7] EASY-RSA: PKI & KEYS
 # =========================
 echo "Khởi tạo PKI với easy-rsa (CA, server, client)"
 mkdir -p /etc/openvpn/easy-rsa
@@ -84,12 +108,12 @@ cp -r /usr/share/easy-rsa/* /etc/openvpn/easy-rsa/
 
 pushd /etc/openvpn/easy-rsa >/dev/null
 export EASYRSA_BATCH=1
-export EASYRSA_REQ_CN="vpn-ca"
+export EASYRSA_REQ_CN="server"  # Đảm bảo commonName là "server"
 
 if [[ ! -d pki ]]; then
   ./easyrsa init-pki
   ./easyrsa build-ca nopass
-  ./easyrsa build-server-full server nopass
+  ./easyrsa build-server-full server nopass  # Sử dụng 'server' làm commonName
   ./easyrsa build-client-full $CLIENT_NAME nopass
   ./easyrsa gen-crl
   openvpn --genkey --secret pki/ta.key
@@ -97,7 +121,7 @@ fi
 popd >/dev/null
 
 # =========================
-# [7] OPENVPN SERVER CONFIG
+# [8] OPENVPN SERVER CONFIG
 # =========================
 echo "Tạo cấu hình OpenVPN server tại /etc/openvpn/server.conf"
 mkdir -p /etc/openvpn/server
@@ -144,7 +168,7 @@ EOF
 systemctl enable --now openvpn-server@server.service
 
 # =========================
-# [8] TẠO FILE .OVPN CHO ANDROID
+# [9] TẠO FILE .OVPN CHO ANDROID
 # =========================
 echo "Tạo file cấu hình client: /root/${CLIENT_NAME}.ovpn"
 CA_B64=$(base64 -w0 /etc/openvpn/server/ca.crt)
@@ -184,7 +208,7 @@ EOF
 chmod 600 /root/${CLIENT_NAME}.ovpn
 
 # =========================
-# [9] CÀI ĐẶT sing-box (binary)
+# [10] CÀI ĐẶT sing-box (binary)
 # =========================
 echo "Cài đặt sing-box (tun2socks)..."
 if ! command -v /usr/local/bin/sing-box >/dev/null 2>&1; then
@@ -198,7 +222,7 @@ if ! command -v /usr/local/bin/sing-box >/dev/null 2>&1; then
 fi
 
 # =========================
-# [10] CẤU HÌNH sing-box
+# [11] CẤU HÌNH sing-box
 # =========================
 echo "Cấu hình sing-box..."
 IN6_BLOCK=""
@@ -248,7 +272,7 @@ EOF
 chmod 600 /etc/sing-box.json
 
 # =========================
-# [11] SYSTEMD: sing-box
+# [12] SYSTEMD: sing-box
 # =========================
 echo "Tạo service sing-box..."
 cat > /etc/systemd/system/sing-box.service <<'EOF'
@@ -270,7 +294,7 @@ systemctl daemon-reload
 systemctl enable --now sing-box
 
 # =========================
-# [12] POLICY ROUTING (đẩy traffic từ tun0 vào sb-tun)
+# [13] POLICY ROUTING (đẩy traffic từ tun0 vào sb-tun)
 # =========================
 echo "Thiết lập policy routing..."
 iptables -t mangle -C PREROUTING -i $OVPN_TUN_IF -j MARK --set-mark 66 2>/dev/null || iptables -t mangle -A PREROUTING -i $OVPN_TUN_IF -j MARK --set-mark 66
@@ -278,7 +302,7 @@ ip rule add fwmark 66 table 100
 ip route add default dev sb-tun table 100
 
 # =========================
-# [13] SYSTEMD: Route giữ sau reboot
+# [14] SYSTEMD: Route giữ sau reboot
 # =========================
 cat > /etc/systemd/system/ovpn-socks-routing.service <<'EOF'
 [Unit]
@@ -300,7 +324,7 @@ systemctl daemon-reload
 systemctl enable --now ovpn-socks-routing
 
 # =========================
-# [14] KIỂM TRA NHANH
+# [15] KIỂM TRA NHANH
 # =========================
 echo "Kiểm tra trạng thái dịch vụ..."
 systemctl status openvpn-server@server
