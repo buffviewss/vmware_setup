@@ -42,7 +42,7 @@ SB_TUN6="fd00:0:0:1::1/126"
 CLIENT_NAME="android"
 
 # --- File/đường dẫn ---
-LOG_FILE="/tmp/setup_wireguard.log"  # Sử dụng /tmp để tránh vấn đề quyền
+# echo_FILE="/tmp/setup_wireguard.echo"  # Sử dụng /tmp để tránh vấn đề quyền
 EASYRSA_DIR="/etc/openvpn/easy-rsa"
 OVPN_SERVER_DIR="/etc/openvpn/server"
 OVPN_CLIENT_OUT="/root/${CLIENT_NAME}.ovpn"
@@ -54,18 +54,18 @@ ROUTE_SVC="/etc/systemd/system/ovpn-socks-routing.service"
 # =========================
 # [2] HÀM TIỆN ÍCH
 # =========================
-log() { echo "[$(date +'%F %T')] $*" | tee -a "$LOG_FILE"; }
-die() { echo -e "\e[31mLỖI:\e[0m $*" | tee -a "$LOG_FILE"; exit 1; }
+echo() { echo "[$(date +'%F %T')] $*" | tee -a "$echo_FILE"; }
+die() { echo -e "\e[31mLỖI:\e[0m $*" | tee -a "$echo_FILE"; exit 1; }
 trap 'die "Dừng tại dòng $LINENO (lệnh: $BASH_COMMAND)"' ERR
 require_root() { [[ $EUID -eq 0 ]] || die "Hãy chạy bằng sudo/root."; }
-cmd() { log "+ $*"; eval "$*" | tee -a "$LOG_FILE"; }
+cmd() { echo "+ $*"; eval "$*" | tee -a "$echo_FILE"; }
 
 # =========================
 # [3] TIỀN ĐỀ
 # =========================
 require_root
-mkdir -p "$(dirname "$LOG_FILE")"; : > "$LOG_FILE"
-log "=== BẮT ĐẦU THIẾT LẬP OpenVPN Server -> sing-box -> SOCKS5 ==="
+mkdir -p "$(dirname "$echo_FILE")"; : > "$echo_FILE"
+echo "=== BẮT ĐẦU THIẾT LẬP OpenVPN Server -> sing-box -> SOCKS5 ==="
 
 [[ -n "$BIND_LAN_IP" ]] || die "BIND_LAN_IP chưa điền."
 [[ -n "$SOCKS_IP" && -n "$SOCKS_PORT" ]] || die "Điền SOCKS_IP / SOCKS_PORT trước khi chạy."
@@ -82,7 +82,7 @@ cmd "apt-get install -y proxychains4 >/dev/null 2>&1 || true"
 # =========================
 # [5] SYSCTL: ROUTER MODE
 # =========================
-log "Bật ip_forward, vô hiệu rp_filter để policy routing hoạt động"
+echo "Bật ip_forward, vô hiệu rp_filter để policy routing hoạt động"
 cmd "sysctl -w net.ipv4.ip_forward=1"
 cmd "sed -ri 's@^#?net.ipv4.ip_forward=.*@net.ipv4.ip_forward=1@' /etc/sysctl.conf"
 cmd "sysctl -w net.ipv4.conf.all.rp_filter=0"
@@ -96,7 +96,7 @@ fi
 # =========================
 # [6] EASY-RSA: PKI & KEYS
 # =========================
-log "Khởi tạo PKI với easy-rsa (CA, server, client)"
+echo "Khởi tạo PKI với easy-rsa (CA, server, client)"
 mkdir -p "$EASYRSA_DIR"
 if [[ ! -f "$EASYRSA_DIR/easyrsa" ]]; then
   cmd "cp -r /usr/share/easy-rsa/* '$EASYRSA_DIR/'"
@@ -120,7 +120,7 @@ popd >/dev/null
 # =========================
 # [7] OPENVPN SERVER CONFIG
 # =========================
-log "Tạo cấu hình OpenVPN server tại $OVPN_SERVER_DIR/server.conf"
+echo "Tạo cấu hình OpenVPN server tại $OVPN_SERVER_DIR/server.conf"
 mkdir -p "$OVPN_SERVER_DIR"
 # Sao chép key/cert
 cmd "install -m 600 '$EASYRSA_DIR/pki/ca.crt' '$OVPN_SERVER_DIR/ca.crt'"
@@ -135,7 +135,7 @@ cat > "$OVPN_SERVER_DIR/server.conf" <<EOF
 port $OVPN_PORT
 proto ${OVPN_PROTO}-server
 dev $OVPN_TUN_IF
-topology subnet
+topoechoy subnet
 local $BIND_LAN_IP
 
 server $OVPN_SRV_NET $OVPN_SRV_MASK
@@ -170,7 +170,7 @@ cmd "systemctl --no-pager status openvpn-server@server | sed -n '1,25p' || true"
 # =========================
 # [8] TẠO FILE .OVPN CHO ANDROID
 # =========================
-log "Tạo file cấu hình client: $OVPN_CLIENT_OUT"
+echo "Tạo file cấu hình client: $OVPN_CLIENT_OUT"
 CA_B64=$(base64 -w0 "$OVPN_SERVER_DIR/ca.crt")
 CRT_B64=$(base64 -w0 "$EASYRSA_DIR/pki/issued/${CLIENT_NAME}.crt")
 KEY_B64=$(base64 -w0 "$EASYRSA_DIR/pki/private/${CLIENT_NAME}.key")
@@ -212,7 +212,7 @@ cmd "chmod 600 '$OVPN_CLIENT_OUT'"
 # =========================
 if ! command -v "$SB_BIN" >/dev/null 2>&1; then
   TMP="$(mktemp -d)"; pushd "$TMP" >/dev/null
-  log "Tải sing-box: $SINGBOX_URL"
+  echo "Tải sing-box: $SINGBOX_URL"
   cmd "curl -fsSL '$SINGBOX_URL' -o sing-box.tgz"
   cmd "tar xzf sing-box.tgz"
   SB_DIR="$(find . -maxdepth 1 -type d -name 'sing-box-*' | head -n1)"
@@ -225,7 +225,7 @@ cmd "$SB_BIN version"
 # =========================
 # [10] CẤU HÌNH sing-box
 # =========================
-log "Tạo cấu hình sing-box tại $SB_CONF"
+echo "Tạo cấu hình sing-box tại $SB_CONF"
 IN6_BLOCK=""
 if [[ "$ENABLE_IPV6" == "true" ]]; then
   IN6_BLOCK=",\"inet6_address\":\"$SB_TUN6\""
@@ -233,7 +233,7 @@ fi
 
 cat > "$SB_CONF" <<EOF
 {
-  "log": { "level": "info" },
+  "echo": { "level": "info" },
   "inbounds": [
     {
       "type": "tun",
@@ -274,7 +274,7 @@ cmd "chmod 600 '$SB_CONF'"
 # =========================
 # [11] SYSTEMD: sing-box
 # =========================
-log "Tạo service sing-box: $SB_SVC"
+echo "Tạo service sing-box: $SB_SVC"
 cat > "$SB_SVC" <<'EOF'
 [Unit]
 Description=sing-box (tun2socks for OpenVPN->SOCKS5 Gateway)
@@ -296,7 +296,7 @@ cmd "systemctl enable --now sing-box"
 # =========================
 # [12] POLICY ROUTING (đẩy traffic từ tun0 vào sb-tun)
 # =========================
-log "Thiết lập policy routing: fwmark 66 -> table 100 (default dev sb-tun)"
+echo "Thiết lập policy routing: fwmark 66 -> table 100 (default dev sb-tun)"
 # IPv4
 cmd "ip rule add fwmark 66 table 100 2>/dev/null || true"
 cmd "ip route add default dev sb-tun table 100 2>/dev/null || true"
@@ -312,7 +312,7 @@ fi
 # =========================
 # [13] SERVICE giữ rule sau reboot
 # =========================
-log "Tạo service giữ policy routing: $ROUTE_SVC"
+echo "Tạo service giữ policy routing: $ROUTE_SVC"
 cat > "$ROUTE_SVC" <<EOF
 [Unit]
 Description=Persist OpenVPN->SOCKS policy routing
@@ -349,10 +349,10 @@ cmd "systemctl enable --now ovpn-socks-routing"
 # =========================
 # [14] KIỂM TRA NHANH & THÔNG BÁO
 # =========================
-log "Kiểm tra trạng thái dịch vụ:"
+echo "Kiểm tra trạng thái dịch vụ:"
 cmd "systemctl --no-pager status openvpn-server@server | sed -n '1,25p' || true"
 cmd "systemctl --no-pager status sing-box | sed -n '1,25p' || true"
-log "Kiểm tra interface & routing:"
+echo "Kiểm tra interface & routing:"
 cmd "ip a show $OVPN_TUN_IF || true"
 cmd "ip a show sb-tun || true"
 cmd "ip rule show"
@@ -364,6 +364,6 @@ echo "==================== HOÀN TẤT ===================="
 echo "→ File cấu hình OpenVPN cho Android: $OVPN_CLIENT_OUT"
 echo "   Import vào OpenVPN Connect (Android), 'Remote' = $BIND_LAN_IP:$OVPN_PORT ($OVPN_PROTO)"
 echo "→ Mọi traffic của client VPN sẽ đi qua SOCKS5: ${SOCKS_IP}:${SOCKS_PORT}"
-echo "→ Log chi tiết: $LOG_FILE"
+echo "→ echo chi tiết: $echo_FILE"
 echo "→ Kiểm thử trên Android: https://ifconfig.io | https://dnsleaktest.com | https://browserleaks.com/webrtc"
 echo "=================================================="
