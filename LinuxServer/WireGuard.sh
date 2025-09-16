@@ -11,7 +11,7 @@ WG_SUBNET="10.0.0.0/24"          # VPN subnet for WireGuard (clients)
 WG_SERVER_IP="10.0.0.1"          # Server's VPN IP (first IP in WG_SUBNET)
 LAN_INTERFACE="eth0"            # Interface name of local LAN (if needed)
 WAN_INTERFACE="eth1"            # Interface name connected to Internet
-SOCKS5_PROXY="user:pass@1.2.3.4:1080"  # SOCKS5 proxy (with user:pass@IP:PORT)
+SOCKS5_PROXY="eyvizq4mf8n3:6jo0C8dNSfrtkclt@217.180.44.121:6012"  # SOCKS5 proxy (with user:pass@IP:PORT)
 
 # Derived values
 WG_NETMASK="${WG_SUBNET#*/}"
