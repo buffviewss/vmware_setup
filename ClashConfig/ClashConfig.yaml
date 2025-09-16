@@ -8,7 +8,7 @@ log-level: info
 proxies:
   - name: "MySOCKS5"
     type: socks5
-    server: 154.62.174.66
+    server: 185.92.209.192
     port: 6012
     username: eyvizq4mf8n3
     password: 6jo0C8dNSfrtkclt
@@ -28,7 +28,7 @@ dns:
   enable: true
   listen: 0.0.0.0:53
   enhanced-mode: redir-host       #fake-ip
-  fake-ip-range: 198.18.0.1/16
+  fake-ip-range: 198.18.0.3/16
   nameserver:
     - 1.1.1.1
     - 8.8.8.8
