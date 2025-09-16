@@ -1,137 +1,93 @@
 #!/bin/bash
-set -e
 
-##########################
-#  Configuration Variables
-##########################
+# --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
+WG_IPV4="10.0.0.1/24"           # Địa chỉ của wg0 (server)
+WG_PORT=51820                    # Cổng lắng nghe WireGuard
+WG_INTERFACE="ens33"             # Interface ra Internet (WAN, ens33)
+WG_CLIENT_IPV4="10.0.0.2"        # IP của client Android (peer)
+SOCKS_SERVER="217.180.44.121"           # Địa chỉ proxy SOCKS5 (IPv4 hoặc hostname)
+SOCKS_PORT=6012                  # Cổng proxy SOCKS5
+SOCKS_USER="eyvizq4mf8n3"       # Tên người dùng proxy SOCKS5
+SOCKS_PASS="6jo0C8dNSfrtkclt"       # Mật khẩu người dùng proxy SOCKS5
+PROXY_SOCKS_SERVER="${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_SERVER}:${SOCKS_PORT}"  # Tên biến dùng khi thêm route
+# Nếu proxy có DNS riêng, có thể thêm biến DNS_PROVIDER tương tự
+#DNS_PROVIDER="8.8.8.8"
 
-WG_INTERFACE="wg0"
-WG_PORT=51820
-WG_SUBNET="10.0.0.0/24"          # VPN subnet for WireGuard (clients)
-WG_SERVER_IP="10.0.0.1"          # Server's VPN IP (first IP in WG_SUBNET)
-LAN_INTERFACE="eth0"            # Interface name of local LAN (if needed)
-WAN_INTERFACE="eth1"            # Interface name connected to Internet
-SOCKS5_PROXY="eyvizq4mf8n3:6jo0C8dNSfrtkclt@217.180.44.121:6012"  # SOCKS5 proxy (with user:pass@IP:PORT)
+# --- Log các bước ---
+echo "1. Cài đặt WireGuard và các gói cần thiết..."
+apt update
+apt install -y wireguard iproute2 iptables    # apt-get cần cập nhật
 
-# Derived values
-WG_NETMASK="${WG_SUBNET#*/}"
-WG_NETWORK="${WG_SUBNET%/*}"
-SOCKS_HOST="${SOCKS5_PROXY#*@}"
-SOCKS_HOST="${SOCKS_HOST%:*}"
-SOCKS_PORT="${SOCKS5_PROXY##*:}"
-TUN_INTERFACE="tun1"
-TUN_IP="198.18.0.1"              # IP for the tun interface
-TUN_VIRT="198.18.0.2"            # Virtual router IP on the TUN (must differ by 1 in subnet)
-ORIG_GW="$(ip route show default | awk '/default/ {print $3}')"
-ORIG_IF="$(ip route show default | awk '/default/ {print $5}')"
-
-log() {
-  echo "[*] $@" 1>&2
-}
-
-error_exit() {
-  echo "Error: $@" 1>&2
-  exit 1
-}
-
-#####################
-#  Install Packages
-#####################
-
-log "Updating apt and installing required packages..."
-apt-get update -qq || error_exit "apt-get update failed"
-apt-get install -y --no-install-recommends \
-    wireguard iptables iproute2 unzip || error_exit "apt-get install failed"
-
-# Optional: iptables-persistent if you want to save rules, not used in this script
-
-###################################
-#  Enable IP forwarding (IPv4)
-###################################
-log "Enabling IP forwarding..."
-sysctl -w net.ipv4.ip_forward=1 || error_exit "Failed to enable IPv4 forwarding"
-
-#####################
-#  WireGuard Setup
-#####################
-
-log "Generating WireGuard keys..."
-SERVER_PRIV_KEY="$(wg genkey)"
-SERVER_PUB_KEY="$(echo "$SERVER_PRIV_KEY" | wg pubkey)"
-
-log "Writing WireGuard server config to /etc/wireguard/${WG_INTERFACE}.conf"
+echo "2. Tạo thư mục cấu hình WireGuard (/etc/wireguard)..."
 mkdir -p /etc/wireguard
 chmod 700 /etc/wireguard
-cat > /etc/wireguard/${WG_INTERFACE}.conf <<EOF
-[Interface]
-Address = ${WG_SERVER_IP}/${WG_NETMASK}
-ListenPort = ${WG_PORT}
-PrivateKey = ${SERVER_PRIV_KEY}
-# Enable packet forwarding/NAT on interface up/down
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
-EOF
-chmod 600 /etc/wireguard/${WG_INTERFACE}.conf
 
-# Note: Client peer configs (public keys, etc.) should be added separately; the script does not output any private keys or client details.
-# Also ensure the WG subnets and allowed-IPs on the clients are set (e.g. AllowedIPs = 0.0.0.0/0 for full-tunnel).
+cd /etc/wireguard
 
-log "Bringing up WireGuard interface ${WG_INTERFACE}..."
-wg-quick up ${WG_INTERFACE} || error_exit "Failed to bring up WireGuard interface"
-
-###################################
-#  tun2socks (BadVPN) Setup
-###################################
-
-log "Creating TUN interface ${TUN_INTERFACE}..."
-ip tuntap add dev ${TUN_INTERFACE} mode tun user nobody || error_exit "Failed to add TUN device"
-ip addr add ${TUN_IP}/30 dev ${TUN_INTERFACE} || error_exit "Failed to set IP on TUN device"
-ip link set dev ${TUN_INTERFACE} up || error_exit "Failed to set TUN up"
-
-# Configure routes: force default route through tun1, except for the SOCKS5 server
-log "Configuring routes: routing all traffic via ${TUN_INTERFACE} (SOCKS5 proxy)"
-# Remove existing default route
-ip route del default dev ${ORIG_IF} || true
-# Route only the SOCKS proxy host via original gateway
-ip route add ${SOCKS_HOST} via ${ORIG_GW} dev ${ORIG_IF} proto static || error_exit "Failed to route proxy host"
-# Route default via the TUN interface’s “virtual” router IP
-ip route add default via ${TUN_VIRT} dev ${TUN_INTERFACE} metric 1 || error_exit "Failed to add default route via TUN"
-# Also add original default as a backup (higher metric)
-ip route add default via ${ORIG_GW} dev ${ORIG_IF} metric 10
-
-# Start tun2socks (BadVPN) in gateway mode
-log "Starting tun2socks (Badvpn) on ${TUN_INTERFACE} -> ${SOCKS5_PROXY}..."
-badvpn-tun2socks --tundev ${TUN_INTERFACE} \
-                 --netif-ipaddr ${TUN_VIRT} --netif-netmask 255.255.255.252 \
-                 --socks-server-addr ${SOCKS_HOST}:${SOCKS_PORT} &> /var/log/tun2socks.log &
-TUN2SOCKS_PID=$!
-sleep 1
-if ! kill -0 $TUN2SOCKS_PID 2>/dev/null; then
-    error_exit "tun2socks failed to start (check /var/log/tun2socks.log)"
+# Tạo khóa server nếu chưa có
+if [ ! -f server_private.key ]; then
+  echo "Đang tạo khóa riêng WireGuard cho server..."
+  wg genkey | tee server_private.key | wg pubkey > server_public.key
+  chmod 600 server_private.key
+  echo "Khóa WireGuard đã được sinh: server_private.key, server_public.key"
 fi
 
-###################################
-#  Firewall (iptables) Rules
-###################################
+# --- Tạo cấu hình wg0.conf ---
+echo "3. Tạo file cấu hình wg0.conf..."
+cat > wg0.conf <<EOF
+[Interface]
+Address = ${WG_IPV4}
+ListenPort = ${WG_PORT}
+PrivateKey = $(cat server_private.key)
+# Enable forwarding/Giải pháp NAT sẽ cài ngoài
 
-log "Setting up firewall rules (iptables)..."
-# Flush custom chains (optional: ensure clean slate)
-iptables -t nat -F
-iptables -t mangle -F
-iptables -F
+[Peer]
+# Cấu hình cho client Android
+AllowedIPs = ${WG_CLIENT_IPV4}/32
+PublicKey = <KHÓA_CÔNG_KHAI_CỦA_CLIENT>
+EOF
+echo "Đã tạo /etc/wireguard/wg0.conf. Bạn cần thay '<KHÓA_CÔNG_KHAI_CỦA_CLIENT>'."
 
-# Allow established connections
-iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+echo "4. Kích hoạt IP forwarding..."
+# Bật IP forwarding
+sysctl -w net.ipv4.ip_forward=1
 
-# Allow traffic from WG tunnel to tun1 (so proxying works)
-iptables -A FORWARD -i ${WG_INTERFACE} -o ${TUN_INTERFACE} -j ACCEPT
-iptables -A FORWARD -i ${TUN_INTERFACE} -o ${WG_INTERFACE} -j ACCEPT
+echo "5. Tắt rp_filter trên interface chính để tun2socks hoạt động..."
+sysctl -w net.ipv4.conf.all.rp_filter=0
+sysctl -w net.ipv4.conf.${WG_INTERFACE}.rp_filter=0
 
-# Drop any VPN subnet traffic going out WAN (prevent bypass)
-iptables -A FORWARD -s ${WG_SUBNET} -o ${WAN_INTERFACE} -j DROP
-iptables -A OUTPUT  -s ${WG_SUBNET} -o ${WAN_INTERFACE} -j DROP
+echo "6. Thiết lập thiết bị TUN và định tuyến cho tun2socks..."
+# Tạo thiết bị TUN
+ip tuntap add mode tun dev tun0
+ip addr add 198.18.0.1/30 dev tun0
+ip link set up dev tun0
 
-# (Optional) NAT: Masquerade out tun1 if needed (safety)
-iptables -t nat -A POSTROUTING -s ${WG_SUBNET} -o ${TUN_INTERFACE} -j MASQUERADE
+# Lấy gateway mặc định gốc
+GATEWAY=$(ip route | awk '/^default/ {print $3}')
+# Thêm route cho SOCKS proxy qua gateway gốc (tránh lặp vòng)
+if [ -n "${PROXY_SOCKS_SERVER}" ] && [ "${PROXY_SOCKS_SERVER}" != "127.0.0.1" ]; then
+  echo " - Đường dẫn riêng cho proxy SOCKS5 ${PROXY_SOCKS_SERVER} qua gateway gốc..."
+  ip route add ${SOCKS_SERVER} via ${GATEWAY} dev ${WG_INTERFACE}
+fi
+# Đưa toàn bộ lưu lượng khác qua tun0
+echo " - Đặt tun0 làm gateway mặc định tạm thời..."
+ip route add default via 198.18.0.1 dev tun0 metric 1
+ip route add default via ${GATEWAY} dev ens34 metric 10   # Chỉnh lại để sử dụng ens34 cho LAN
 
-log "Configuration complete. WireGuard is up on ${WG_INTERFACE}, tun2socks running on ${TUN_INTERFACE}."
+echo "7. Chạy tun2socks để chuyển hướng qua proxy SOCKS5..."
+# Chạy tun2socks (xjasonlyu/tun2socks)
+# Phải đảm bảo đã cài tun2socks sẵn (có thể tải từ GitHub hoặc từ bản phát hành)
+nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
+echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
+
+echo "8. Cấu hình iptables cho WG và TUN..."
+# Cho phép forward giữa wg0 và tun0
+iptables -A FORWARD -i wg0 -o tun0 -j ACCEPT
+iptables -A FORWARD -i tun0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+# NAT lưu lượng ra tun0
+iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+
+echo "9. Kích hoạt WireGuard (wg-quick up wg0)..."
+wg-quick up wg0
+
+echo "Hoàn tất. WireGuard và tun2socks đã được cấu hình."
