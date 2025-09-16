@@ -30,9 +30,8 @@ dns:
   enhanced-mode: redir-host       #fake-ip
   fake-ip-range: 198.18.0.1/16
   nameserver:
-    - 154.62.175.190
-  #   - 1.1.1.1
-  #   - 8.8.8.8
-  # fallback:
-  #   - 9.9.9.9
-  #   - 8.8.4.4
+    - 1.1.1.1
+    - 8.8.8.8
+  fallback:
+    - 9.9.9.9
+    - 8.8.4.4
