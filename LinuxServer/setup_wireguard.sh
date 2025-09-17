@@ -1,71 +1,100 @@
 #!/bin/bash
 
-# --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
-WG_IPV4="10.0.0.1/24"           # Địa chỉ của wg0 (server)
-WG_PORT=51820                    # Cổng lắng nghe WireGuard
-WG_INTERFACE="ens33"             # Interface ra Internet (WAN, ens33)
-WG_CLIENT_IPV4="10.0.0.2"        # IP của client Android (peer)
-SOCKS_SERVER="217.180.44.121"    # Địa chỉ proxy SOCKS5 (IPv4 hoặc hostname)
-SOCKS_PORT=6012                  # Cổng proxy SOCKS5
-SOCKS_USER="eyvizq4mf8n3"        # Tên người dùng proxy SOCKS5
-SOCKS_PASS="6jo0C8dNSfrtkclt"    # Mật khẩu người dùng proxy SOCKS5
-PROXY_SOCKS_SERVER="${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_SERVER}:${SOCKS_PORT}"  # Tên biến dùng khi thêm route
+# --- Kiểm tra quyền root ---
+if [ "$EUID" -ne 0 ]; then
+  echo "Vui lòng chạy script với quyền root."
+  exit 1
+fi
 
-# --- Log các bước ---
+# --- Nhập thủ công khóa nếu muốn ---
+SERVER_PRIVATE_KEY=""   # Dán private key server vào đây nếu có, nếu để trống sẽ tự sinh
+SERVER_PUBLIC_KEY=""    # Dán public key server vào đây nếu có, nếu để trống sẽ tự sinh
+CLIENT_PRIVATE_KEY=""   # Dán private key client vào đây nếu có, nếu để trống sẽ tự sinh
+CLIENT_PUBLIC_KEY=""    # Dán public key client vào đây nếu có, nếu để trống sẽ tự sinh
+
+# --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
+WG_IPV4="10.0.0.1/24"
+WG_PORT=51820
+WG_INTERFACE="ens33"
+WG_CLIENT_IPV4="10.0.0.2"
+SOCKS_SERVER="217.180.44.121"
+SOCKS_PORT=6012
+SOCKS_USER="eyvizq4mf8n3"
+SOCKS_PASS="6jo0C8dNSfrtkclt"
+PROXY_SOCKS_SERVER="${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_SERVER}:${SOCKS_PORT}"
+
+# --- Cấu hình card mạng LAN (ens34) ---
+LAN_INTERFACE="ens34"
+LAN_IP="192.168.56.1/24"
+
 echo "1. Cài đặt WireGuard và các gói cần thiết..."
 apt update
-apt install -y wireguard iproute2 iptables    # apt-get cần cập nhật
+apt install -y wireguard iproute2 iptables
 
-echo "2. Tạo thư mục cấu hình WireGuard (/etc/wireguard)..."
+echo "2. Cấu hình IP tĩnh cho card LAN ($LAN_INTERFACE)..."
+if ! ip addr show $LAN_INTERFACE | grep -q "${LAN_IP%%/*}"; then
+  ip link set $LAN_INTERFACE up
+  ip addr flush dev $LAN_INTERFACE
+  ip addr add $LAN_IP dev $LAN_INTERFACE
+  echo "Đã gán IP $LAN_IP cho $LAN_INTERFACE."
+else
+  echo "$LAN_INTERFACE đã có IP $LAN_IP."
+fi
+
+echo "3. Tạo thư mục cấu hình WireGuard (/etc/wireguard)..."
 mkdir -p /etc/wireguard
 chmod 700 /etc/wireguard
-
 cd /etc/wireguard
 
-# --- Tạo khóa cho server và client (nếu chưa có) ---
-# Tạo khóa riêng và công khai cho server
-if [ ! -f server_private.key ]; then
+# --- Tạo hoặc nhập khóa cho server ---
+if [ -n "$SERVER_PRIVATE_KEY" ] && [ -n "$SERVER_PUBLIC_KEY" ]; then
+  echo "$SERVER_PRIVATE_KEY" > server_private.key
+  echo "$SERVER_PUBLIC_KEY" > server_public.key
+  chmod 600 server_private.key
+  echo "Đã nhập khóa server thủ công."
+elif [ ! -f server_private.key ]; then
   echo "Đang tạo khóa riêng WireGuard cho server..."
   wg genkey | tee server_private.key | wg pubkey > server_public.key
   chmod 600 server_private.key
   echo "Khóa WireGuard server đã được sinh: server_private.key, server_public.key"
 fi
 
-# Tạo khóa riêng và công khai cho client
-if [ ! -f client_private.key ]; then
+# --- Tạo hoặc nhập khóa cho client ---
+if [ -n "$CLIENT_PRIVATE_KEY" ] && [ -n "$CLIENT_PUBLIC_KEY" ]; then
+  echo "$CLIENT_PRIVATE_KEY" > client_private.key
+  echo "$CLIENT_PUBLIC_KEY" > client_public.key
+  chmod 600 client_private.key
+  echo "Đã nhập khóa client thủ công."
+elif [ ! -f client_private.key ]; then
   echo "Đang tạo khóa riêng WireGuard cho client..."
   wg genkey | tee client_private.key | wg pubkey > client_public.key
   chmod 600 client_private.key
   echo "Khóa WireGuard client đã được sinh: client_private.key, client_public.key"
 fi
 
-# --- Tạo cấu hình wg0.conf ---
-echo "3. Tạo file cấu hình wg0.conf..."
+echo "4. Tạo file cấu hình wg0.conf..."
 cat > wg0.conf <<EOF
 [Interface]
 Address = ${WG_IPV4}
 ListenPort = ${WG_PORT}
 PrivateKey = $(cat server_private.key)
-# Enable forwarding/Giải pháp NAT sẽ cài ngoài
 
 [Peer]
-# Cấu hình cho client Android
 AllowedIPs = ${WG_CLIENT_IPV4}/32
 PublicKey = $(cat client_public.key)
 EOF
 echo "Đã tạo /etc/wireguard/wg0.conf. Khóa công khai của client đã được thêm vào."
 
-# --- Kích hoạt IP forwarding ---
-echo "4. Kích hoạt IP forwarding..."
-# Bật IP forwarding
+echo "5. Kích hoạt IP forwarding..."
 sysctl -w net.ipv4.ip_forward=1
+sed -i 's/^#*net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
 
-echo "5. Tắt rp_filter trên interface chính để tun2socks hoạt động..."
+echo "6. Tắt rp_filter trên interface chính để tun2socks hoạt động..."
 sysctl -w net.ipv4.conf.all.rp_filter=0
 sysctl -w net.ipv4.conf.${WG_INTERFACE}.rp_filter=0
 
-echo "6. Thiết lập thiết bị TUN và định tuyến cho tun2socks..."
-# Tạo thiết bị TUN
+echo "7. Thiết lập thiết bị TUN và định tuyến cho tun2socks..."
+ip tuntap del mode tun dev tun0 2>/dev/null
 ip tuntap add mode tun dev tun0
 ip addr add 198.18.0.1/30 dev tun0
 ip link set up dev tun0
@@ -77,31 +106,26 @@ if [ -n "${PROXY_SOCKS_SERVER}" ] && [ "${PROXY_SOCKS_SERVER}" != "127.0.0.1" ];
   echo " - Đường dẫn riêng cho proxy SOCKS5 ${PROXY_SOCKS_SERVER} qua gateway gốc..."
   ip route add ${SOCKS_SERVER} via ${GATEWAY} dev ${WG_INTERFACE}
 fi
+
 # Đưa toàn bộ lưu lượng khác qua tun0
 echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 ip route add default via 198.18.0.1 dev tun0 metric 1
-ip route add default via ${GATEWAY} dev ens34 metric 10   # Chỉnh lại để sử dụng ens34 cho LAN
 
-echo "7. Chạy tun2socks để chuyển hướng qua proxy SOCKS5..."
-# Chạy tun2socks (xjasonlyu/tun2socks)
-# Phải đảm bảo đã cài tun2socks sẵn (có thể tải từ GitHub hoặc từ bản phát hành)
+echo "8. Chạy tun2socks để chuyển hướng qua proxy SOCKS5..."
 nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
 echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
 
-echo "8. Cấu hình iptables cho WG và TUN..."
-# Cho phép forward giữa wg0 và tun0
+echo "9. Cấu hình iptables cho WG và TUN..."
 iptables -A FORWARD -i wg0 -o tun0 -j ACCEPT
 iptables -A FORWARD -i tun0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-# NAT lưu lượng ra tun0
 iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
 
-echo "9. Kích hoạt WireGuard (wg-quick up wg0)..."
+echo "10. Kích hoạt WireGuard (wg-quick up wg0)..."
 wg-quick up wg0
 
 echo "Hoàn tất. WireGuard và tun2socks đã được cấu hình."
 
-# --- Thông báo cho người dùng cấu hình trên client ---
-echo "10. Cấu hình trên Client Android (WireGuard App):"
+echo "11. Cấu hình trên Client Android (WireGuard App):"
 echo "--------------------------------------------------------------------"
 echo "[Interface]"
 echo "PrivateKey = $(cat client_private.key)"
@@ -112,4 +136,4 @@ echo "PublicKey = $(cat server_public.key)"
 echo "Endpoint = <server_ip>:51820"
 echo "AllowedIPs = 0.0.0.0/0"
 echo "--------------------------------------------------------------------"
-echo "Lưu ý: Thay <server_ip> bằng IP công cộng của server WireGuard."
+echo "Lưu ý: Thay <server_ip> bằng IP công cộng hoặc IP LAN của server WireGuard."
