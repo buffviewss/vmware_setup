@@ -7,10 +7,10 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # --- Nhập thủ công khóa nếu muốn ---
-SERVER_PRIVATE_KEY=""   # Dán private key server vào đây nếu có, nếu để trống sẽ tự sinh
-SERVER_PUBLIC_KEY=""    # Dán public key server vào đây nếu có, nếu để trống sẽ tự sinh
-CLIENT_PRIVATE_KEY=""   # Dán private key client vào đây nếu có, nếu để trống sẽ tự sinh
-CLIENT_PUBLIC_KEY=""    # Dán public key client vào đây nếu có, nếu để trống sẽ tự sinh
+SERVER_PRIVATE_KEY="7Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Qw6Q="   # Dán private key server vào đây nếu có, nếu để trống sẽ tự sinh
+SERVER_PUBLIC_KEY="6Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw="    # Dán public key server vào đây nếu có, nếu để trống sẽ tự sinh
+CLIENT_PRIVATE_KEY="9Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Qw6Q="   # Dán private key client vào đây nếu có, nếu để trống sẽ tự sinh
+CLIENT_PUBLIC_KEY="8Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw="    # Dán public key client vào đây nếu có, nếu để trống sẽ tự sinh
 
 # --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
 WG_IPV4="10.0.0.1/24"
