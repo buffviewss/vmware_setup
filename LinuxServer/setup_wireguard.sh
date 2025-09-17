@@ -3,7 +3,7 @@
 # --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
 WG_IPV4="10.0.0.1/24"           # Địa chỉ của wg0 (server)
 WG_PORT=51820                    # Cổng lắng nghe WireGuard
-WG_INTERFACE="ens34"             # Interface ra Internet (WAN, ens33)
+WG_INTERFACE="ens33"             # Interface ra Internet (WAN, ens33)
 WG_CLIENT_IPV4="10.0.0.2"        # IP của client Android (peer)
 SOCKS_SERVER="217.180.44.121"    # Địa chỉ proxy SOCKS5 (IPv4 hoặc hostname)
 SOCKS_PORT=6012                  # Cổng proxy SOCKS5
