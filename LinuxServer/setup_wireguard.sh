@@ -1,342 +1,115 @@
-#!/usr/bin/env bash
-# ======================================================================
-# OpenVPN Server (LAN) -> sing-box (tun2socks) -> SOCKS5 Gateway
-# Mục tiêu: Android VM (OpenVPN client) -> Ubuntu (OpenVPN server)
-#           -> sb-tun (sing-box) -> SOCKS5 (user/pass) -> Internet
-# ======================================================================
+#!/bin/bash
 
-set -Eeuo pipefail
+# --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
+WG_IPV4="10.0.0.1/24"           # Địa chỉ của wg0 (server)
+WG_PORT=51820                    # Cổng lắng nghe WireGuard
+WG_INTERFACE="ens34"             # Interface ra Internet (WAN, ens33)
+WG_CLIENT_IPV4="10.0.0.2"        # IP của client Android (peer)
+SOCKS_SERVER="217.180.44.121"    # Địa chỉ proxy SOCKS5 (IPv4 hoặc hostname)
+SOCKS_PORT=6012                  # Cổng proxy SOCKS5
+SOCKS_USER="eyvizq4mf8n3"        # Tên người dùng proxy SOCKS5
+SOCKS_PASS="6jo0C8dNSfrtkclt"    # Mật khẩu người dùng proxy SOCKS5
+PROXY_SOCKS_SERVER="${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_SERVER}:${SOCKS_PORT}"  # Tên biến dùng khi thêm route
 
-# =========================
-# [1] THÔNG SỐ CẦN SỬA
-# =========================
+# --- Log các bước ---
+echo "1. Cài đặt WireGuard và các gói cần thiết..."
+apt update
+apt install -y wireguard iproute2 iptables    # apt-get cần cập nhật
 
-# --- OpenVPN Server ---
-BIND_LAN_IP="192.168.50.1"         # IP LAN của Ubuntu (Android sẽ remote tới IP này)
-OVPN_PORT="443"                    # TCP/443 khuyến nghị
-OVPN_PROTO="tcp"                   # 'tcp' (server sẽ là 'proto tcp-server')
-OVPN_NET="10.9.0.0/24"             # subnet VPN cấp cho client
-OVPN_DNS1="1.1.1.1"                # DNS đẩy về client
-OVPN_DNS2="8.8.8.8"                # DNS đẩy về client
-OVPN_TUN_IF="tun0"                 # tên interface OpenVPN server mặc định
+echo "2. Tạo thư mục cấu hình WireGuard (/etc/wireguard)..."
+mkdir -p /etc/wireguard
+chmod 700 /etc/wireguard
 
-# --- SOCKS5 (ra Internet) ---
-SOCKS_IP="185.100.170.239"
-SOCKS_PORT="52743"
-SOCKS_USER="VpvasmYp65hDU9t"                      # "" nếu không cần
-SOCKS_PASS="S2aOw7QhmoTO3eg"                      # "" nếu không cần
-SOCKS_UDP_OVER_TCP="false"         # true nếu proxy KHÔNG hỗ trợ UDP Associate
+cd /etc/wireguard
 
-# --- sing-box binary ---
-SINGBOX_VERSION="1.8.13"
-SINGBOX_ARCH="amd64"               # amd64 | arm64 | 386 ...
-SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${SINGBOX_ARCH}.tar.gz"
+# --- Tạo khóa cho server và client (nếu chưa có) ---
+# Tạo khóa riêng và công khai cho server
+if [ ! -f server_private.key ]; then
+  echo "Đang tạo khóa riêng WireGuard cho server..."
+  wg genkey | tee server_private.key | wg pubkey > server_public.key
+  chmod 600 server_private.key
+  echo "Khóa WireGuard server đã được sinh: server_private.key, server_public.key"
+fi
 
-# --- Tùy chọn IPv6 (để 'false' nếu chưa cần) ---
-ENABLE_IPV6="false"
-SB_TUN4="198.18.0.1/30"
-SB_TUN6="fd00:0:0:1::1/126"
+# Tạo khóa riêng và công khai cho client
+if [ ! -f client_private.key ]; then
+  echo "Đang tạo khóa riêng WireGuard cho client..."
+  wg genkey | tee client_private.key | wg pubkey > client_public.key
+  chmod 600 client_private.key
+  echo "Khóa WireGuard client đã được sinh: client_private.key, client_public.key"
+fi
 
-# --- Tên client OpenVPN (sinh file .ovpn) ---
-CLIENT_NAME="android"
+# --- Tạo cấu hình wg0.conf ---
+echo "3. Tạo file cấu hình wg0.conf..."
+cat > wg0.conf <<EOF
+[Interface]
+Address = ${WG_IPV4}
+ListenPort = ${WG_PORT}
+PrivateKey = $(cat server_private.key)
+# Enable forwarding/Giải pháp NAT sẽ cài ngoài
 
-# =========================
-# [2] HÀM TIỆN ÍCH
-# =========================
-log() { echo "[$(date +'%F %T')] $*"; }
-die() { echo -e "\e[31mLỖI:\e[0m $*"; exit 1; }
-trap 'die "Dừng tại dòng $LINENO (lệnh: $BASH_COMMAND)"' ERR
-require_root() { [[ $EUID -eq 0 ]] || die "Hãy chạy bằng sudo/root."; }
-cmd() { echo "+ $*"; eval "$*"; }
+[Peer]
+# Cấu hình cho client Android
+AllowedIPs = ${WG_CLIENT_IPV4}/32
+PublicKey = $(cat client_public.key)
+EOF
+echo "Đã tạo /etc/wireguard/wg0.conf. Khóa công khai của client đã được thêm vào."
 
-# =========================
-# [3] TIỀN ĐỀ
-# =========================
-require_root
-
-# =========================
-# [4] CÀI GÓI HỆ THỐNG
-# =========================
-echo "Cài đặt OpenVPN, easy-rsa và các gói cần thiết..."
-apt-get update -y
-apt-get install -y openvpn easy-rsa curl tar iproute2 iptables
-
-# =========================
-# [5] SYSCTL: ROUTER MODE
-# =========================
-echo "Bật ip_forward, vô hiệu rp_filter để policy routing hoạt động"
+# --- Kích hoạt IP forwarding ---
+echo "4. Kích hoạt IP forwarding..."
+# Bật IP forwarding
 sysctl -w net.ipv4.ip_forward=1
-sed -ri 's@^#?net.ipv4.ip_forward=.*@net.ipv4.ip_forward=1@' /etc/sysctl.conf
+
+echo "5. Tắt rp_filter trên interface chính để tun2socks hoạt động..."
 sysctl -w net.ipv4.conf.all.rp_filter=0
-sed -ri 's@^#?net.ipv4.conf.all.rp_filter=.*@net.ipv4.conf.all.rp_filter=0@' /etc/sysctl.conf
+sysctl -w net.ipv4.conf.${WG_INTERFACE}.rp_filter=0
 
-if [[ "$ENABLE_IPV6" == "true" ]]; then
-  sysctl -w net.ipv6.conf.all.forwarding=1
-  sed -ri 's@^#?net.ipv6.conf.all.forwarding=.*@net.ipv6.conf.all.forwarding=1@' /etc/sysctl.conf
+echo "6. Thiết lập thiết bị TUN và định tuyến cho tun2socks..."
+# Tạo thiết bị TUN
+ip tuntap add mode tun dev tun0
+ip addr add 198.18.0.1/30 dev tun0
+ip link set up dev tun0
+
+# Lấy gateway mặc định gốc
+GATEWAY=$(ip route | awk '/^default/ {print $3}')
+# Thêm route cho SOCKS proxy qua gateway gốc (tránh lặp vòng)
+if [ -n "${PROXY_SOCKS_SERVER}" ] && [ "${PROXY_SOCKS_SERVER}" != "127.0.0.1" ]; then
+  echo " - Đường dẫn riêng cho proxy SOCKS5 ${PROXY_SOCKS_SERVER} qua gateway gốc..."
+  ip route add ${SOCKS_SERVER} via ${GATEWAY} dev ${WG_INTERFACE}
 fi
+# Đưa toàn bộ lưu lượng khác qua tun0
+echo " - Đặt tun0 làm gateway mặc định tạm thời..."
+ip route add default via 198.18.0.1 dev tun0 metric 1
+ip route add default via ${GATEWAY} dev ens34 metric 10   # Chỉnh lại để sử dụng ens34 cho LAN
 
-# =========================
-# [6] TẠO FILE VARS (CẬP NHẬT COMMONNAME)
-# =========================
-echo "Tạo file vars cho EasyRSA..."
-cat > /etc/openvpn/easy-rsa/vars <<EOF
-# EasyRSA variables
-export EASYRSA_BATCH="1"      # Tắt các câu hỏi xác nhận
-export EASYRSA_REQ_CN="server" # commonName cho server certificate
-export EASYRSA_REQ_COUNTRY="GB"
-export EASYRSA_REQ_PROVINCE="London"
-export EASYRSA_REQ_CITY="London"
-export EASYRSA_REQ_ORG="MyOrg"
-export EASYRSA_REQ_EMAIL="iaernaoe@uk.com"
-export EASYRSA_REQ_OU="MyOrgUnit"
-export EASYRSA_KEY_SIZE=2048   # Kích thước khóa RSA (2048-bit)
-export EASYRSA_ALGO="rsa"     # Thuật toán khóa RSA
-export EASYRSA_CA_EXPIRE=3650 # Thời gian hết hạn chứng chỉ CA (10 năm)
-export EASYRSA_CERT_EXPIRE=3650 # Thời gian hết hạn chứng chỉ (10 năm)
+echo "7. Chạy tun2socks để chuyển hướng qua proxy SOCKS5..."
+# Chạy tun2socks (xjasonlyu/tun2socks)
+# Phải đảm bảo đã cài tun2socks sẵn (có thể tải từ GitHub hoặc từ bản phát hành)
+nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
+echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
 
-# Set the OpenVPN-related default parameters
-export EASYRSA_DEFAULT_NICKNAME="server" # Tên chứng chỉ cho server
-export EASYRSA_DEFAULT_KEY_SIZE=2048
-EOF
+echo "8. Cấu hình iptables cho WG và TUN..."
+# Cho phép forward giữa wg0 và tun0
+iptables -A FORWARD -i wg0 -o tun0 -j ACCEPT
+iptables -A FORWARD -i tun0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+# NAT lưu lượng ra tun0
+iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
 
-# =========================
-# [7] EASY-RSA: PKI & KEYS
-# =========================
-echo "Khởi tạo PKI với easy-rsa (CA, server, client)"
-mkdir -p /etc/openvpn/easy-rsa
-cp -r /usr/share/easy-rsa/* /etc/openvpn/easy-rsa/
+echo "9. Kích hoạt WireGuard (wg-quick up wg0)..."
+wg-quick up wg0
 
-pushd /etc/openvpn/easy-rsa >/dev/null
-export EASYRSA_BATCH=1
-export EASYRSA_REQ_CN="server"  # Đảm bảo commonName là "server"
+echo "Hoàn tất. WireGuard và tun2socks đã được cấu hình."
 
-if [[ ! -d pki ]]; then
-  ./easyrsa init-pki
-  ./easyrsa build-ca nopass
-  ./easyrsa build-server-full server nopass  # Sử dụng 'server' làm commonName
-  ./easyrsa build-client-full $CLIENT_NAME nopass
-  ./easyrsa gen-crl
-  openvpn --genkey --secret pki/ta.key
-fi
-popd >/dev/null
-
-# =========================
-# [8] OPENVPN SERVER CONFIG
-# =========================
-echo "Tạo cấu hình OpenVPN server tại /etc/openvpn/server.conf"
-mkdir -p /etc/openvpn/server
-cp /etc/openvpn/easy-rsa/pki/ca.crt /etc/openvpn/server/ca.crt
-cp /etc/openvpn/easy-rsa/pki/issued/server.crt /etc/openvpn/server/server.crt
-cp /etc/openvpn/easy-rsa/pki/private/server.key /etc/openvpn/server/server.key
-cp /etc/openvpn/easy-rsa/pki/ta.key /etc/openvpn/server/ta.key
-
-OVPN_SRV_NET="${OVPN_NET%/*}"
-OVPN_SRV_MASK="$(ipcalc -m "$OVPN_NET" | awk -F= '/NETMASK/ {print $2}')"
-
-cat > /etc/openvpn/server/server.conf <<EOF
-port $OVPN_PORT
-proto ${OVPN_PROTO}-server
-dev $OVPN_TUN_IF
-topology subnet
-local $BIND_LAN_IP
-
-server $OVPN_SRV_NET $OVPN_SRV_MASK
-ifconfig-pool-persist ipp.txt
-
-ca /etc/openvpn/server/ca.crt
-cert /etc/openvpn/server/server.crt
-key /etc/openvpn/server/server.key
-tls-crypt /etc/openvpn/server/ta.key
-
-# Bảo mật/cipher hiện đại
-data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
-data-ciphers-fallback AES-256-GCM
-auth SHA256
-persist-key
-persist-tun
-keepalive 10 120
-verb 3
-explicit-exit-notify 0
-
-# Đẩy toàn bộ traffic + DNS vào tunnel
-push "redirect-gateway def1"
-push "dhcp-option DNS $OVPN_DNS1"
-push "dhcp-option DNS $OVPN_DNS2"
-EOF
-
-# Bật & khởi động OpenVPN server
-systemctl enable --now openvpn-server@server.service
-
-# =========================
-# [9] TẠO FILE .OVPN CHO ANDROID
-# =========================
-echo "Tạo file cấu hình client: /root/${CLIENT_NAME}.ovpn"
-CA_B64=$(base64 -w0 /etc/openvpn/server/ca.crt)
-CRT_B64=$(base64 -w0 /etc/openvpn/easy-rsa/pki/issued/${CLIENT_NAME}.crt)
-KEY_B64=$(base64 -w0 /etc/openvpn/easy-rsa/pki/private/${CLIENT_NAME}.key)
-TA_B64=$(base64 -w0 /etc/openvpn/server/ta.key)
-
-cat > /root/${CLIENT_NAME}.ovpn <<EOF
-client
-dev tun
-proto $OVPN_PROTO
-remote $BIND_LAN_IP $OVPN_PORT
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-auth SHA256
-remote-cert-tls server
-verb 3
-auth-nocache
-cipher AES-256-GCM
-setenv opt block-outside-dns
-
-<ca>
-$(base64 -d <<<"$CA_B64")
-</ca>
-<cert>
-$(base64 -d <<<"$CRT_B64")
-</cert>
-<key>
-$(base64 -d <<<"$KEY_B64")
-</key>
-<tls-crypt>
-$(base64 -d <<<"$TA_B64")
-</tls-crypt>
-EOF
-chmod 600 /root/${CLIENT_NAME}.ovpn
-
-# =========================
-# [10] CÀI ĐẶT sing-box (binary)
-# =========================
-echo "Cài đặt sing-box (tun2socks)..."
-if ! command -v /usr/local/bin/sing-box >/dev/null 2>&1; then
-  TMP="$(mktemp -d)"; pushd "$TMP" >/dev/null
-  curl -fsSL "$SINGBOX_URL" -o sing-box.tgz
-  tar xzf sing-box.tgz
-  SB_DIR="$(find . -maxdepth 1 -type d -name 'sing-box-*' | head -n1)"
-  [[ -n "$SB_DIR" ]] || die "Giải nén sing-box thất bại."
-  install -m 0755 "$SB_DIR/sing-box" /usr/local/bin/sing-box
-  popd >/dev/null; rm -rf "$TMP"
-fi
-
-# =========================
-# [11] CẤU HÌNH sing-box
-# =========================
-echo "Cấu hình sing-box..."
-IN6_BLOCK=""
-if [[ "$ENABLE_IPV6" == "true" ]]; then
-  IN6_BLOCK=",\"inet6_address\":\"$SB_TUN6\""
-fi
-
-cat > /etc/sing-box.json <<EOF
-{
-  "log": { "level": "info" },
-  "inbounds": [
-    {
-      "type": "tun",
-      "interface_name": "sb-tun",
-      "inet4_address": "$SB_TUN4"$IN6_BLOCK,
-      "mtu": 9000,
-      "auto_route": false,
-      "stack": "system"
-    }
-  ],
-  "outbounds": [
-    {
-      "type": "socks",
-      "server": "$SOCKS_IP",
-      "server_port": $SOCKS_PORT,
-      "version": "5",
-      "username": "$SOCKS_USER",
-      "password": "$SOCKS_PASS",
-      "udp_over_tcp": $SOCKS_UDP_OVER_TCP,
-      "tag": "socks"
-    },
-    { "type": "direct", "tag": "direct" }
-  ],
-  "route": {
-    "rules": [
-      {
-        "protocol": [ "tcp", "udp" ],
-        "source_ip_cidr": [ "$OVPN_NET" ],
-        "outbound": "socks"
-      }
-    ],
-    "final": "direct"
-  }
-}
-EOF
-
-chmod 600 /etc/sing-box.json
-
-# =========================
-# [12] SYSTEMD: sing-box
-# =========================
-echo "Tạo service sing-box..."
-cat > /etc/systemd/system/sing-box.service <<'EOF'
-[Unit]
-Description=sing-box (tun2socks for OpenVPN->SOCKS5 Gateway)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=root
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box.json
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now sing-box
-
-# =========================
-# [13] POLICY ROUTING (đẩy traffic từ tun0 vào sb-tun)
-# =========================
-echo "Thiết lập policy routing..."
-iptables -t mangle -C PREROUTING -i $OVPN_TUN_IF -j MARK --set-mark 66 2>/dev/null || iptables -t mangle -A PREROUTING -i $OVPN_TUN_IF -j MARK --set-mark 66
-ip rule add fwmark 66 table 100
-ip route add default dev sb-tun table 100
-
-# =========================
-# [14] SYSTEMD: Route giữ sau reboot
-# =========================
-cat > /etc/systemd/system/ovpn-socks-routing.service <<'EOF'
-[Unit]
-Description=Persist OpenVPN->SOCKS policy routing
-After=network-online.target sing-box.service openvpn-server@server.service
-Wants=network-online.target sing-box.service
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -c 'ip rule add fwmark 66 table 100 || true'
-ExecStart=/bin/sh -c 'ip route add default dev sb-tun table 100 || true'
-ExecStart=/bin/sh -c 'iptables -t mangle -C PREROUTING -i $OVPN_TUN_IF -j MARK --set-mark 66 2>/dev/null || iptables -t mangle -A PREROUTING -i $OVPN_TUN_IF -j MARK --set-mark 66'
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now ovpn-socks-routing
-
-# =========================
-# [15] KIỂM TRA NHANH
-# =========================
-echo "Kiểm tra trạng thái dịch vụ..."
-systemctl status openvpn-server@server
-systemctl status sing-box
-ip a show $OVPN_TUN_IF
-ip a show sb-tun
-ip rule show
-ip route show table 100
-iptables -t mangle -S PREROUTING | grep MARK
-
-echo "==================== HOÀN TẤT ===================="
-echo "→ File cấu hình OpenVPN cho Android: /root/${CLIENT_NAME}.ovpn"
-echo "→ Mọi traffic của client VPN sẽ đi qua SOCKS5: ${SOCKS_IP}:${SOCKS_PORT}"
-echo "→ Kiểm thử trên Android: https://ifconfig.io | https://dnsleaktest.com | https://browserleaks.com/webrtc"
-echo "=================================================="
+# --- Thông báo cho người dùng cấu hình trên client ---
+echo "10. Cấu hình trên Client Android (WireGuard App):"
+echo "--------------------------------------------------------------------"
+echo "[Interface]"
+echo "PrivateKey = $(cat client_private.key)"
+echo "Address = 10.0.0.2/32"
+echo ""
+echo "[Peer]"
+echo "PublicKey = $(cat server_public.key)"
+echo "Endpoint = <server_ip>:51820"
+echo "AllowedIPs = 0.0.0.0/0"
+echo "--------------------------------------------------------------------"
+echo "Lưu ý: Thay <server_ip> bằng IP công cộng của server WireGuard."
