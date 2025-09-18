@@ -6,6 +6,46 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# --- Tự động phát hiện cổng WAN và LAN ---
+WAN_INTERFACE=""
+LAN_INTERFACE=""
+
+for iface in $(ls /sys/class/net | grep -v lo); do
+  # Bỏ qua interface không có IP
+  ip_addr=$(ip -4 addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+  [ -z "$ip_addr" ] && continue
+
+  # Nếu interface này là default gateway => WAN
+  if ip route | grep -q "^default.*dev $iface"; then
+    WAN_INTERFACE="$iface"
+  else
+    # Thử ping Internet từ interface này
+    if ping -I $iface -c 1 -W 1 8.8.8.8 &>/dev/null; then
+      WAN_INTERFACE="$iface"
+    else
+      LAN_INTERFACE="$iface"
+    fi
+  fi
+done
+
+if [ -z "$WAN_INTERFACE" ] || [ -z "$LAN_INTERFACE" ]; then
+  echo "Không phát hiện được đủ 2 interface mạng (WAN/LAN). Hãy kiểm tra lại cấu hình mạng."
+  exit 1
+fi
+
+echo "Đã phát hiện: WAN = $WAN_INTERFACE, LAN = $LAN_INTERFACE"
+
+# --- Gán lại biến cấu hình ---
+WG_INTERFACE="$WAN_INTERFACE"
+LAN_INTERFACE="$LAN_INTERFACE"
+
+# --- Gán IP cho LAN ---
+LAN_IP="192.168.56.1/24"
+echo "Gán IP $LAN_IP cho $LAN_INTERFACE..."
+ip link set $LAN_INTERFACE up
+ip addr flush dev $LAN_INTERFACE
+ip addr add $LAN_IP dev $LAN_INTERFACE
+
 # --- Nhập thủ công khóa nếu muốn ---
 SERVER_PRIVATE_KEY="7Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Qw6Q="   # Dán private key server vào đây nếu có, nếu để trống sẽ tự sinh
 SERVER_PUBLIC_KEY="6Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw="    # Dán public key server vào đây nếu có, nếu để trống sẽ tự sinh
@@ -15,7 +55,6 @@ CLIENT_PUBLIC_KEY="8Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw6Q4Qw="    # Dán publi
 # --- Biến cấu hình (chỉnh sửa tùy môi trường) ---
 WG_IPV4="10.0.0.1/24"
 WG_PORT=51820
-WG_INTERFACE="ens33"
 WG_CLIENT_IPV4="10.0.0.2"
 SOCKS_SERVER="217.180.44.121"
 SOCKS_PORT=6012
@@ -23,23 +62,12 @@ SOCKS_USER="eyvizq4mf8n3"
 SOCKS_PASS="6jo0C8dNSfrtkclt"
 PROXY_SOCKS_SERVER="${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_SERVER}:${SOCKS_PORT}"
 
-# --- Cấu hình card mạng LAN (ens34) ---
-LAN_INTERFACE="ens34"
-LAN_IP="192.168.56.1/24"
-
 echo "1. Cài đặt WireGuard và các gói cần thiết..."
 apt update
 apt install -y wireguard iproute2 iptables
 
 echo "2. Cấu hình IP tĩnh cho card LAN ($LAN_INTERFACE)..."
-if ! ip addr show $LAN_INTERFACE | grep -q "${LAN_IP%%/*}"; then
-  ip link set $LAN_INTERFACE up
-  ip addr flush dev $LAN_INTERFACE
-  ip addr add $LAN_IP dev $LAN_INTERFACE
-  echo "Đã gán IP $LAN_IP cho $LAN_INTERFACE."
-else
-  echo "$LAN_INTERFACE đã có IP $LAN_IP."
-fi
+# Đã gán ở trên
 
 echo "3. Tạo thư mục cấu hình WireGuard (/etc/wireguard)..."
 mkdir -p /etc/wireguard
@@ -133,7 +161,7 @@ echo "Address = 10.0.0.2/32"
 echo ""
 echo "[Peer]"
 echo "PublicKey = $(cat server_public.key)"
-echo "Endpoint = <server_ip>:51820"
+echo "Endpoint = ${LAN_IP%%/*}:51820"
 echo "AllowedIPs = 0.0.0.0/0"
 echo "--------------------------------------------------------------------"
-echo "Lưu ý: Thay <server_ip> bằng IP công cộng hoặc IP LAN của server WireGuard."
+echo "Lưu ý: Thay ${LAN_IP%%/*} bằng IP LAN của server nếu khác."
