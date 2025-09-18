@@ -177,13 +177,49 @@ if ! ip link show wg0 &>/dev/null; then
 fi
 
 echo "11. Khởi động tun2socks..."
-nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
+
+# Đảm bảo /dev/net/tun sẵn sàng
+modprobe tun || true
+
+TUN2SOCKS_BIN="/usr/local/bin/tun2socks"
+if [ ! -x "$TUN2SOCKS_BIN" ]; then
+  if command -v tun2socks >/dev/null 2>&1; then
+    TUN2SOCKS_BIN="$(command -v tun2socks)"
+  else
+    echo "Không tìm thấy binary tun2socks!"
+    exit 1
+  fi
+fi
+
+# Policy routing chỉ cho WG subnet
+WG_SUBNET="10.0.0.0/24"
+TABLE_ID=100
+ip rule del from ${WG_SUBNET} table ${TABLE_ID} 2>/dev/null || true
+ip route flush table ${TABLE_ID}
+ip rule add from ${WG_SUBNET} lookup ${TABLE_ID} priority 100
+ip route add default dev tun0 table ${TABLE_ID}
+
+# Route tới SOCKS đi thẳng WAN gateway
+GATEWAY=$(ip route | awk '/^default/ && /dev '"$WAN_INTERFACE"'/ {print $3; exit}')
+ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
+
+# Khởi chạy với debug log
+pkill -f tun2socks 2>/dev/null || true
+nohup "$TUN2SOCKS_BIN" \
+  -loglevel debug \
+  -device "tun://tun0" \
+  -proxy "socks5://${PROXY_SOCKS_SERVER}" \
+  -interface "${WG_INTERFACE}" \
+  > /var/log/tun2socks.log 2>&1 &
+
 sleep 2
 if ! pgrep -f tun2socks >/dev/null; then
-  echo "tun2socks không chạy! Kiểm tra lại cài đặt hoặc log."
+  echo "tun2socks không chạy! In 50 dòng log cuối để chẩn đoán:"
+  tail -n 50 /var/log/tun2socks.log || true
   exit 1
 fi
 echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
+
 
 echo "12. Xóa rule iptables cũ (nếu có)..."
 iptables -D FORWARD -i wg0 -o tun0 -j ACCEPT 2>/dev/null || true
