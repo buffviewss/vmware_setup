@@ -144,7 +144,9 @@ echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 
 echo "8. Cài đặt tun2socks (bản xjasonlyu)..."
 
-# Gỡ bản cũ
+set -euo pipefail
+
+# Dọn bản cũ nếu có
 pkill -f tun2socks 2>/dev/null || true
 rm -f /usr/local/bin/tun2socks 2>/dev/null || true
 rm -rf /tmp/tun2socks-build 2>/dev/null || true
@@ -152,18 +154,18 @@ rm -rf /tmp/tun2socks-build 2>/dev/null || true
 apt update
 apt install -y golang git build-essential
 
-# Clone + build từ root repo, xuất binary trực tiếp vào /usr/local/bin
+# Clone repo vào /tmp và build ra /usr/local/bin/tun2socks
 mkdir -p /tmp/tun2socks-build
 cd /tmp/tun2socks-build
 git clone https://github.com/xjasonlyu/tun2socks.git
 REPO_DIR="/tmp/tun2socks-build/tun2socks"
-cd "$REPO_DIR"
 
-# Build: chỉ định gói ./cmd/tun2socks và output đích
+# Build từ root repo, chỉ định gói và output đích bằng đường dẫn tuyệt đối
+cd "$REPO_DIR"
 go build -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks ./cmd/tun2socks
 chmod 0755 /usr/local/bin/tun2socks
 
-# Kiểm tra sau build (bắt buộc có -device và -proxy)
+# Kiểm tra hậu build (bắt buộc có -device và -proxy)
 T2S="/usr/local/bin/tun2socks"
 if [ ! -x "$T2S" ]; then
   echo "Build tun2socks thất bại: không thấy $T2S hoặc không thực thi được."; exit 1
@@ -174,8 +176,8 @@ fi
 grep -q -- "-device" /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -device"; exit 1; }
 grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -proxy";  exit 1; }
 [ "$(stat -c%s "$T2S")" -ge 1000000 ] || { echo "Binary quá nhỏ, nghi build lỗi"; exit 1; }
-
 echo "✅ tun2socks đã build OK: $T2S"
+
 
 
 echo "10. Kích hoạt WireGuard (wg-quick up wg0)..."
