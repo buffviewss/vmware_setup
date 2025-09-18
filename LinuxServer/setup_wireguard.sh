@@ -178,14 +178,14 @@ fi
 
 echo "11. Khởi động tun2socks..."
 
-# Bảo đảm module TUN & bảng định tuyến riêng (ID 100)
+# --- Bảo đảm TUN & bảng định tuyến riêng ---
 modprobe tun || true
 if ! grep -qE '^[[:space:]]*100[[:space:]]+wgproxy$' /etc/iproute2/rt_tables; then
   echo "100 wgproxy" >> /etc/iproute2/rt_tables
 fi
 
-# Policy routing: chỉ lưu lượng từ mạng WG đi qua tun0
-WG_SUBNET="10.0.0.0/24"
+# Chỉ đẩy lưu lượng từ mạng WG vào tun0 (policy routing)
+WG_SUBNET="10.0.0.0/24"   # khớp với WG_IPV4=10.0.0.1/24 ở trên
 TABLE_ID=100
 ip rule del from ${WG_SUBNET} table ${TABLE_ID} 2>/dev/null || true
 ip -4 route flush table ${TABLE_ID} 2>/dev/null || true
@@ -199,17 +199,19 @@ if [ -z "$GATEWAY" ]; then
 fi
 ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
 
-# Khai báo proxy qua biến môi trường ALL_PROXY (bản này KHÔNG có -proxy/-proxyServer)
-export ALL_PROXY="socks5://${PROXY_SOCKS_SERVER}"
+# --- Khai báo proxy cho tun2socks qua môi trường ---
+# LƯU Ý: Bản tun2socks của bạn yêu cầu scheme 'socks://'
+export ALL_PROXY="socks://${PROXY_SOCKS_SERVER}"
+# Xóa các proxy khác để tránh nhiễu (tùy chọn)
+unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
 
-# Dọn tiến trình/log cũ
+# --- Dọn tiến trình/log cũ và khởi chạy ---
 pkill -f '/usr/local/bin/tun2socks' 2>/dev/null || true
 rm -f /var/log/tun2socks.log 2>/dev/null || true
 
-# Chạy tun2socks: trùng khớp với tun0 đã tạo 198.18.0.1/30 (host giữ .1, tun2socks dùng .2)
+# Host đã tạo tun0: 198.18.0.1/30 ở bước trước → phía tun2socks dùng .2
 nohup /usr/local/bin/tun2socks \
   -loglevel debug \
-  -proxyType "socks" \
   -tunName "tun0" \
   -tunAddr "198.18.0.2" \
   -tunGw   "198.18.0.1" \
@@ -218,14 +220,12 @@ nohup /usr/local/bin/tun2socks \
   > /var/log/tun2socks.log 2>&1 &
 
 sleep 2
-if ! pgrep -f '/usr/local/bin/tun2socks' >/dev/null; then
+if ! pgrep -f '/usr/local/bin/tun2socks' >/devnull 2>&1; then
   echo "tun2socks không chạy! In 80 dòng log cuối để chẩn đoán:"
   tail -n 80 /var/log/tun2socks.log || true
   exit 1
 fi
 echo "Đã khởi động tun2socks (log: /var/log/tun2socks.log)."
-
-
 
 
 
