@@ -129,13 +129,13 @@ ip tuntap add mode tun dev tun0
 ip addr add 198.18.0.1/30 dev tun0
 ip link set up dev tun0
 
-# Lấy gateway mặc định gốc
-GATEWAY=$(ip route | awk '/^default/ {print $3}')
+# Lấy gateway mặc định gốc của WAN_INTERFACE
+GATEWAY=$(ip route | awk '/^default/ && /dev '"$WAN_INTERFACE"'/ {print $3; exit}')
 # Thêm route cho SOCKS proxy qua gateway gốc (tránh lặp vòng)
 if [ -n "${PROXY_SOCKS_SERVER}" ] && [ "${PROXY_SOCKS_SERVER}" != "127.0.0.1" ]; then
   echo " - Đường dẫn riêng cho proxy SOCKS5 ${PROXY_SOCKS_SERVER} qua gateway gốc..."
   ip route del ${SOCKS_SERVER} 2>/dev/null || true
-  ip route add ${SOCKS_SERVER} via ${GATEWAY} dev ${WG_INTERFACE}
+  ip route add ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
 fi
 
 # Đưa toàn bộ lưu lượng khác qua tun0
