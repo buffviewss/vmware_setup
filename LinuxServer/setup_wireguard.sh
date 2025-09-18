@@ -10,21 +10,21 @@ fi
 WAN_INTERFACE=""
 LAN_INTERFACE=""
 
+# Lấy danh sách interface vật lý (bỏ lo)
 for iface in $(ls /sys/class/net | grep -v lo); do
-  # Bỏ qua interface không có IP
-  ip_addr=$(ip -4 addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
-  [ -z "$ip_addr" ] && continue
-
   # Nếu interface này là default gateway => WAN
   if ip route | grep -q "^default.*dev $iface"; then
     WAN_INTERFACE="$iface"
-  else
-    # Thử ping Internet từ interface này
-    if ping -I $iface -c 1 -W 1 8.8.8.8 &>/dev/null; then
-      WAN_INTERFACE="$iface"
-    else
-      LAN_INTERFACE="$iface"
-    fi
+    continue
+  fi
+  # Nếu chưa có WAN, thử ping Internet từ interface này
+  if [ -z "$WAN_INTERFACE" ] && ping -I $iface -c 1 -W 1 8.8.8.8 &>/dev/null; then
+    WAN_INTERFACE="$iface"
+    continue
+  fi
+  # Nếu chưa có LAN, gán làm LAN (ưu tiên interface chưa có IP hoặc DOWN)
+  if [ -z "$LAN_INTERFACE" ]; then
+    LAN_INTERFACE="$iface"
   fi
 done
 
