@@ -142,57 +142,47 @@ fi
 echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 # ip route add default via 198.18.0.1 dev tun0 metric 1
 
-echo "8. Cài đặt tun2socks (bản xjasonlyu) với fix toolchain..."
+echo "8. Cài đặt Go 1.25.x và tun2socks (bản xjasonlyu)..."
 
 set -euo pipefail
 
-# Dọn bản cũ
+# --- Dọn dẹp bản cũ ---
 pkill -f tun2socks 2>/dev/null || true
 rm -f /usr/local/bin/tun2socks 2>/dev/null || true
 rm -rf /tmp/tun2socks-build 2>/dev/null || true
+rm -rf /usr/local/go 2>/dev/null || true
 
 apt update
-apt install -y golang git build-essential ca-certificates
+apt install -y curl ca-certificates git build-essential
 
-# Clone repo
+# --- Cài Go 1.25.x chính thức ---
+GO_TGZ="go1.25.3.linux-amd64.tar.gz"   # nếu cần, đổi sang bản 1.25.x mới hơn
+cd /tmp
+curl -fsSLO "https://go.dev/dl/${GO_TGZ}"
+tar -C /usr/local -xzf "${GO_TGZ}"
+
+# Đặt PATH tạm cho phiên làm việc hiện tại
+export PATH="/usr/local/go/bin:${PATH}"
+# Đặt PATH vĩnh viễn cho các shell mới (tùy chọn)
+echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
+chmod 0644 /etc/profile.d/go.sh
+
+# Kiểm tra Go mới
+go version   # phải in go1.25.x linux/amd64
+
+# --- Clone + build tun2socks từ repo đúng ---
 mkdir -p /tmp/tun2socks-build
 cd /tmp/tun2socks-build
 git clone https://github.com/xjasonlyu/tun2socks.git
 REPO_DIR="/tmp/tun2socks-build/tun2socks"
 cd "$REPO_DIR"
 
-# Ép dùng toolchain local để tránh "toolchain not available"
+# Không cho Go tự kéo toolchain khác (đã là 1.25 rồi)
 export GOTOOLCHAIN=local
-# (tuỳ chọn) build tĩnh hơn một chút
 export CGO_ENABLED=0
 
-echo " - Go version hiện có:"
-go version || true
-echo " - Dùng GOTOOLCHAIN=$GOTOOLCHAIN"
-
-set +e
+# Build ra /usr/local/bin/tun2socks
 go build -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks ./cmd/tun2socks
-BUILD_RC=$?
-set -e
-
-if [ $BUILD_RC -ne 0 ]; then
-  echo "⚠️ Build với toolchain local thất bại. Cài Go mới (1.23.x) rồi thử lại..."
-  # Cài Go chính thức (không phụ thuộc apt)
-  GO_TGZ="go1.23.3.linux-amd64.tar.gz"
-  cd /tmp
-  curl -fsSLO "https://go.dev/dl/${GO_TGZ}"
-  rm -rf /usr/local/go
-  tar -C /usr/local -xzf "${GO_TGZ}"
-  export PATH="/usr/local/go/bin:${PATH}"
-  go version
-
-  # Build lại
-  cd "$REPO_DIR"
-  # Với Go mới, vẫn giữ GOTOOLCHAIN=local để không tự kéo 1.25
-  export GOTOOLCHAIN=local
-  go build -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks ./cmd/tun2socks
-fi
-
 chmod 0755 /usr/local/bin/tun2socks
 
 # --- Kiểm tra sau build ---
@@ -201,18 +191,16 @@ if [ ! -x "$T2S" ]; then
   echo "Build tun2socks thất bại: không thấy $T2S hoặc không thực thi được."
   exit 1
 fi
-
 if ! "$T2S" -h >/tmp/t2s_help.txt 2>&1; then
   echo "Build tun2socks thất bại: chạy '$T2S -h' lỗi."
   cat /tmp/t2s_help.txt || true
   exit 1
 fi
-
 grep -q -- "-device" /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -device"; exit 1; }
 grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -proxy";  exit 1; }
 [ "$(stat -c%s "$T2S")" -ge 1000000 ] || { echo "Binary quá nhỏ, nghi build lỗi"; exit 1; }
 
-echo "✅ tun2socks đã build OK: $T2S ($(/usr/local/bin/tun2socks -version 2>/dev/null || echo 'no-version'))"
+echo "✅ tun2socks đã build OK: $T2S"
 
 
 
