@@ -142,65 +142,84 @@ fi
 echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 # ip route add default via 198.18.0.1 dev tun0 metric 1
 
-echo "8. Cài đặt Go 1.25.x và tun2socks (bản xjasonlyu)..."
+echo "8. Cài Go 1.25 và tun2socks (bản xjasonlyu), chống lỗi 404..."
 
 set -euo pipefail
 
-# --- Dọn dẹp bản cũ ---
+# --- Dọn dẹp cũ ---
 pkill -f tun2socks 2>/dev/null || true
 rm -f /usr/local/bin/tun2socks 2>/dev/null || true
 rm -rf /tmp/tun2socks-build 2>/dev/null || true
 rm -rf /usr/local/go 2>/dev/null || true
 
 apt update
-apt install -y curl ca-certificates git build-essential
+apt install -y ca-certificates git build-essential curl
 
-# --- Cài Go 1.25.x chính thức ---
-GO_TGZ="go1.25.3.linux-amd64.tar.gz"   # nếu cần, đổi sang bản 1.25.x mới hơn
-cd /tmp
-curl -fsSLO "https://go.dev/dl/${GO_TGZ}"
-tar -C /usr/local -xzf "${GO_TGZ}"
+# --- Cài Go 1.25: ưu tiên Snap cho nhanh/ổn định ---
+if command -v snap >/dev/null 2>&1; then
+  echo " - Cài Go qua snap channel 1.25/stable..."
+  snap install go --classic --channel=1.25/stable || true
+fi
 
-# Đặt PATH tạm cho phiên làm việc hiện tại
-export PATH="/usr/local/go/bin:${PATH}"
-# Đặt PATH vĩnh viễn cho các shell mới (tùy chọn)
-echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
-chmod 0644 /etc/profile.d/go.sh
+# Nếu chưa có go hoặc snap fail, dùng tarball + danh sách fallback
+if ! command -v go >/dev/null 2>&1 || ! go version 2>/dev/null | grep -q 'go1\.25'; then
+  echo " - Snap không khả dụng hoặc không phải Go 1.25; chuyển sang tarball..."
+  cd /tmp
+  # Thử lần lượt các bản 1.25.x phổ biến (mới -> cũ) để tránh 404
+  for V in 1.25.5 1.25.4 1.25.3 1.25.2 1.25.1 1.25.0; do
+    TGZ="go${V}.linux-amd64.tar.gz"
+    URL1="https://go.dev/dl/${TGZ}"
+    URL2="https://storage.googleapis.com/golang/${TGZ}"
+    echo "   * Thử tải ${TGZ} ..."
+    if curl -fsSLO "$URL1" || curl -fsSLO "$URL2"; then
+      echo "   -> Tải thành công ${TGZ}"
+      tar -C /usr/local -xzf "${TGZ}"
+      break
+    fi
+  done
+  # Thiết lập PATH cho phiên hiện tại + vĩnh viễn
+  export PATH="/usr/local/go/bin:${PATH}"
+  echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
+  chmod 0644 /etc/profile.d/go.sh
+fi
 
-# Kiểm tra Go mới
-go version   # phải in go1.25.x linux/amd64
+# Kiểm tra Go
+if ! command -v go >/dev/null 2>&1; then
+  echo "❌ Không cài được Go. Dừng!"
+  exit 1
+fi
+go version
+if ! go version | grep -q 'go1\.25'; then
+  echo "❌ Cần Go >= 1.25 để build tun2socks. Dừng!"
+  exit 1
+fi
 
-# --- Clone + build tun2socks từ repo đúng ---
+# --- Clone + build tun2socks ---
 mkdir -p /tmp/tun2socks-build
 cd /tmp/tun2socks-build
 git clone https://github.com/xjasonlyu/tun2socks.git
 REPO_DIR="/tmp/tun2socks-build/tun2socks"
 cd "$REPO_DIR"
 
-# Không cho Go tự kéo toolchain khác (đã là 1.25 rồi)
 export GOTOOLCHAIN=local
 export CGO_ENABLED=0
 
-# Build ra /usr/local/bin/tun2socks
 go build -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks ./cmd/tun2socks
 chmod 0755 /usr/local/bin/tun2socks
 
-# --- Kiểm tra sau build ---
+# --- Kiểm tra hậu build ---
 T2S="/usr/local/bin/tun2socks"
 if [ ! -x "$T2S" ]; then
-  echo "Build tun2socks thất bại: không thấy $T2S hoặc không thực thi được."
-  exit 1
+  echo "❌ Không thấy $T2S hoặc không thực thi được."; exit 1
 fi
 if ! "$T2S" -h >/tmp/t2s_help.txt 2>&1; then
-  echo "Build tun2socks thất bại: chạy '$T2S -h' lỗi."
-  cat /tmp/t2s_help.txt || true
-  exit 1
+  echo "❌ Chạy '$T2S -h' lỗi:"; cat /tmp/t2s_help.txt || true; exit 1
 fi
-grep -q -- "-device" /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -device"; exit 1; }
-grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -proxy";  exit 1; }
-[ "$(stat -c%s "$T2S")" -ge 1000000 ] || { echo "Binary quá nhỏ, nghi build lỗi"; exit 1; }
+grep -q -- "-device" /tmp/t2s_help.txt || { echo "❌ Sai bản tun2socks: thiếu -device"; exit 1; }
+grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "❌ Sai bản tun2socks: thiếu -proxy";  exit 1; }
+[ "$(stat -c%s "$T2S")" -ge 1000000 ] || { echo "❌ Binary quá nhỏ, nghi build lỗi"; exit 1; }
 
-echo "✅ tun2socks đã build OK: $T2S"
+echo "✅ tun2socks đã build OK tại: $T2S"
 
 
 
