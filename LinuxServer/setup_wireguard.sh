@@ -178,33 +178,51 @@ fi
 
 echo "11. Khởi động tun2socks..."
 
-# Đảm bảo /dev/net/tun sẵn sàng
+# Bảo đảm TUN sẵn sàng
 modprobe tun || true
 
+# Đảm bảo binary tun2socks có thể gọi được
 TUN2SOCKS_BIN="/usr/local/bin/tun2socks"
 if [ ! -x "$TUN2SOCKS_BIN" ]; then
   if command -v tun2socks >/dev/null 2>&1; then
     TUN2SOCKS_BIN="$(command -v tun2socks)"
   else
-    echo "Không tìm thấy binary tun2socks!"
+    echo "Không tìm thấy binary tun2socks! Hãy kiểm tra bước cài đặt tun2socks."
     exit 1
   fi
 fi
 
-# Policy routing chỉ cho WG subnet
-WG_SUBNET="10.0.0.0/24"
+# Đảm bảo bảng định tuyến riêng tồn tại (ID 100, tên wgproxy)
+if ! grep -qE '^[[:space:]]*100[[:space:]]+wgproxy$' /etc/iproute2/rt_tables; then
+  echo "100 wgproxy" >> /etc/iproute2/rt_tables
+fi
+
+# Policy routing: chỉ lưu lượng từ mạng WG mới đi qua tun0
+WG_SUBNET="10.0.0.0/24"         # khớp với WG_IPV4=10.0.0.1/24 ở trên
 TABLE_ID=100
+
+# Làm sạch an toàn (không làm script dừng nếu chưa tồn tại)
 ip rule del from ${WG_SUBNET} table ${TABLE_ID} 2>/dev/null || true
-ip route flush table ${TABLE_ID}
+ip -4 route flush table ${TABLE_ID} 2>/dev/null || true
+
+# Thêm rule + default route cho bảng 100 -> tun0
 ip rule add from ${WG_SUBNET} lookup ${TABLE_ID} priority 100
-ip route add default dev tun0 table ${TABLE_ID}
+ip -4 route add default dev tun0 table ${TABLE_ID}
 
-# Route tới SOCKS đi thẳng WAN gateway
+# Đảm bảo tuyến đến SOCKS SERVER đi thẳng qua gateway thật của WAN (không vòng qua tun0)
+# Biến WAN_INTERFACE, SOCKS_SERVER, PROXY_SOCKS_SERVER đã có từ phần trước của script
 GATEWAY=$(ip route | awk '/^default/ && /dev '"$WAN_INTERFACE"'/ {print $3; exit}')
-ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
+if [ -n "$GATEWAY" ]; then
+  ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
+else
+  echo "Không xác định được default gateway cho ${WAN_INTERFACE}. Kiểm tra cấu hình mạng!"
+  exit 1
+fi
 
-# Khởi chạy với debug log
+# Khởi chạy tun2socks với log chi tiết
 pkill -f tun2socks 2>/dev/null || true
+rm -f /var/log/tun2socks.log 2>/dev/null || true
+
 nohup "$TUN2SOCKS_BIN" \
   -loglevel debug \
   -device "tun://tun0" \
@@ -214,11 +232,11 @@ nohup "$TUN2SOCKS_BIN" \
 
 sleep 2
 if ! pgrep -f tun2socks >/dev/null; then
-  echo "tun2socks không chạy! In 50 dòng log cuối để chẩn đoán:"
-  tail -n 50 /var/log/tun2socks.log || true
+  echo "tun2socks không chạy! In 80 dòng log cuối để chẩn đoán:"
+  tail -n 80 /var/log/tun2socks.log || true
   exit 1
 fi
-echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
+echo "Đã khởi động tun2socks (log: /var/log/tun2socks.log)."
 
 
 echo "12. Xóa rule iptables cũ (nếu có)..."
