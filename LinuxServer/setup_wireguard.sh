@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # --- Kiểm tra quyền root ---
 if [ "$EUID" -ne 0 ]; then
   echo "Vui lòng chạy script với quyền root."
@@ -139,21 +141,61 @@ fi
 echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 # ip route add default via 198.18.0.1 dev tun0 metric 1
 
-echo "8. Chạy tun2socks để chuyển hướng qua proxy SOCKS5..."
-nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
-echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
+echo "8. Kiểm tra và cài đặt tun2socks nếu cần..."
+if ! command -v tun2socks &>/dev/null; then
+  echo "tun2socks chưa được cài, đang tiến hành cài đặt..."
+  apt update
+  apt install -y golang git
+  export GOPATH=$HOME/go
+  export PATH=$PATH:$GOPATH/bin
+  if [ ! -d "$HOME/go/src/github.com/eycorsican/go-tun2socks" ]; then
+    mkdir -p $HOME/go/src/github.com/eycorsican
+    cd $HOME/go/src/github.com/eycorsican
+    git clone https://github.com/eycorsican/go-tun2socks.git
+  fi
+  cd $HOME/go/src/github.com/eycorsican/go-tun2socks/cmd/tun2socks
+  go build
+  sudo cp tun2socks /usr/local/bin/
+  cd ~
+fi
 
-echo "9. Cấu hình iptables cho WG và TUN..."
-iptables -A FORWARD -i wg0 -o tun0 -j ACCEPT
-iptables -A FORWARD -i tun0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+# Sau khi build tun2socks, kiểm tra lỗi build
+if [ ! -f $HOME/go/src/github.com/eycorsican/go-tun2socks/cmd/tun2socks/tun2socks ]; then
+  echo "Build tun2socks thất bại! Kiểm tra lại Golang."
+  exit 1
+fi
 
 echo "10. Kích hoạt WireGuard (wg-quick up wg0)..."
 wg-quick up wg0
 
+# Kiểm tra interface wg0 đã lên
+if ! ip link show wg0 &>/dev/null; then
+  echo "WireGuard chưa khởi động thành công!"
+  exit 1
+fi
+
+echo "11. Khởi động tun2socks..."
+nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
+sleep 2
+if ! pgrep -f tun2socks >/dev/null; then
+  echo "tun2socks không chạy! Kiểm tra lại cài đặt hoặc log."
+  exit 1
+fi
+echo "Đã khởi động tun2socks (log tại /var/log/tun2socks.log)."
+
+echo "12. Xóa rule iptables cũ (nếu có)..."
+iptables -D FORWARD -i wg0 -o tun0 -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -i tun0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -t nat -D POSTROUTING -o tun0 -j MASQUERADE 2>/dev/null || true
+
+echo "13. Cấu hình iptables cho WG và TUN..."
+iptables -A FORWARD -i wg0 -o tun0 -j ACCEPT
+iptables -A FORWARD -i tun0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+
 echo "Hoàn tất. WireGuard và tun2socks đã được cấu hình."
 
-echo "11. Cấu hình trên Client Android (WireGuard App):"
+echo "14. Cấu hình trên Client Android (WireGuard App):"
 echo "--------------------------------------------------------------------"
 echo "[Interface]"
 echo "PrivateKey = $(cat client_private.key)"
