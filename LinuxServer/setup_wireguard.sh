@@ -142,29 +142,50 @@ fi
 echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 # ip route add default via 198.18.0.1 dev tun0 metric 1
 
-echo "8. Kiểm tra và cài đặt tun2socks nếu cần..."
-if ! command -v tun2socks &>/dev/null; then
-  echo "tun2socks chưa được cài, đang tiến hành cài đặt..."
-  apt update
-  apt install -y golang git
-  export GOPATH=$HOME/go
-  export PATH=$PATH:$GOPATH/bin
-  if [ ! -d "$HOME/go/src/github.com/eycorsican/go-tun2socks" ]; then
-    mkdir -p $HOME/go/src/github.com/eycorsican
-    cd $HOME/go/src/github.com/eycorsican
-    git clone https://github.com/eycorsican/go-tun2socks.git
-  fi
-  cd $HOME/go/src/github.com/eycorsican/go-tun2socks/cmd/tun2socks
-  go build
-  sudo cp tun2socks /usr/local/bin/
-  cd ~
-fi
+echo "8. Cài đặt tun2socks (bản xjasonlyu)..."
 
-# Sau khi build tun2socks, kiểm tra lỗi build
-if [ ! -f $HOME/go/src/github.com/eycorsican/go-tun2socks/cmd/tun2socks/tun2socks ]; then
-  echo "Build tun2socks thất bại! Kiểm tra lại Golang."
+# Gỡ binary/bản build cũ nếu có
+pkill -f tun2socks 2>/dev/null || true
+rm -f /usr/local/bin/tun2socks 2>/dev/null || true
+rm -rf "$HOME/go/src/github.com/eycorsican/go-tun2socks" 2>/dev/null || true
+rm -rf /tmp/tun2socks-build 2>/dev/null || true
+
+apt update
+apt install -y golang git build-essential
+
+# Build bản mới từ repo chính xác
+mkdir -p /tmp/tun2socks-build
+cd /tmp/tun2socks-build
+git clone https://github.com/xjasonlyu/tun2socks.git
+cd tun2socks/cmd/tun2socks
+go build -trimpath -ldflags "-s -w"
+install -m 0755 tun2socks /usr/local/bin/tun2socks
+
+# --- Kiểm tra sau build ---
+T2S="/usr/local/bin/tun2socks"
+if [ ! -x "$T2S" ]; then
+  echo "Build tun2socks thất bại: không thấy $T2S hoặc không thực thi được."
   exit 1
 fi
+if ! "$T2S" -h >/tmp/t2s_help.txt 2>&1; then
+  echo "Build tun2socks thất bại: chạy '$T2S -h' lỗi."
+  cat /tmp/t2s_help.txt || true
+  exit 1
+fi
+if ! grep -q -- "-device" /tmp/t2s_help.txt; then
+  echo "Sai bản tun2socks: không hỗ trợ flag -device. Dừng!"
+  exit 1
+fi
+if ! grep -q -- "-proxy" /tmp/t2s_help.txt; then
+  echo "Sai bản tun2socks: không hỗ trợ flag -proxy. Dừng!"
+  exit 1
+fi
+if [ "$(stat -c%s "$T2S")" -lt 1000000 ]; then
+  echo "Cảnh báo: kích thước $T2S quá nhỏ, có thể build lỗi. Dừng!"
+  exit 1
+fi
+echo "✅ tun2socks đã build OK và đúng phiên bản: $T2S"
+
 
 echo "10. Kích hoạt WireGuard (wg-quick up wg0)..."
 wg-quick down wg0 2>/dev/null || true
@@ -178,31 +199,32 @@ fi
 
 echo "11. Khởi động tun2socks..."
 
-# Bảo đảm TUN & bảng định tuyến riêng
+# Bảo đảm module TUN và bảng định tuyến riêng (ID 100)
 modprobe tun || true
 if ! grep -qE '^[[:space:]]*100[[:space:]]+wgproxy$' /etc/iproute2/rt_tables; then
   echo "100 wgproxy" >> /etc/iproute2/rt_tables
 fi
 
-# Policy routing: chỉ đẩy lưu lượng từ mạng WG vào tun0
-WG_SUBNET="10.0.0.0/24"   # khớp WG_IPV4=10.0.0.1/24
+# Policy routing: chỉ đẩy lưu lượng TỪ mạng WG vào tun0 (không đổi default route toàn máy)
+WG_SUBNET="10.0.0.0/24"        # khớp với WG_IPV4=10.0.0.1/24
 TABLE_ID=100
 ip rule del from ${WG_SUBNET} table ${TABLE_ID} 2>/dev/null || true
 ip -4 route flush table ${TABLE_ID} 2>/dev/null || true
 ip rule add from ${WG_SUBNET} lookup ${TABLE_ID} priority 100
 ip -4 route add default dev tun0 table ${TABLE_ID}
 
-# Đảm bảo tuyến tới SOCKS đi thẳng qua gateway WAN (tránh vòng qua tun0)
+# Đảm bảo tuyến tới SOCKS đi thẳng qua gateway thật của WAN (tránh vòng qua tun0)
 GATEWAY=$(ip route | awk '/^default/ && /dev '"$WAN_INTERFACE"'/ {print $3; exit}')
 if [ -z "$GATEWAY" ]; then
   echo "Không tìm thấy default gateway cho ${WAN_INTERFACE}"; exit 1
 fi
 ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
 
-# Khởi chạy tun2socks (bản xjasonlyu)
+# Khởi chạy tun2socks (bản xjasonlyu) với đường dẫn tuyệt đối để tránh đụng PATH cũ
 pkill -f '/usr/local/bin/tun2socks' 2>/dev/null || true
 rm -f /var/log/tun2socks.log 2>/dev/null || true
 
+# Host giữ tun0: 198.18.0.1/30; tun2socks dùng cùng device qua -device, không cần set tunAddr ở đây
 nohup /usr/local/bin/tun2socks \
   -loglevel debug \
   -device "tun://tun0" \
@@ -216,7 +238,7 @@ if ! pgrep -f '/usr/local/bin/tun2socks' >/dev/null; then
   tail -n 100 /var/log/tun2socks.log || true
   exit 1
 fi
-echo "Đã khởi động tun2socks (log: /var/log/tun2socks.log)."
+echo "✅ Đã khởi động tun2socks (log: /var/log/tun2socks.log)."
 
 
 
