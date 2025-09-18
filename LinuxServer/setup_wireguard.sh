@@ -178,13 +178,13 @@ fi
 
 echo "11. Khởi động tun2socks..."
 
-# Đảm bảo TUN & bảng 100
+# Bảo đảm module TUN & bảng định tuyến riêng (ID 100)
 modprobe tun || true
 if ! grep -qE '^[[:space:]]*100[[:space:]]+wgproxy$' /etc/iproute2/rt_tables; then
   echo "100 wgproxy" >> /etc/iproute2/rt_tables
 fi
 
-# Policy routing: chỉ đẩy lưu lượng TỪ mạng WG vào tun0
+# Policy routing: chỉ lưu lượng từ mạng WG đi qua tun0
 WG_SUBNET="10.0.0.0/24"
 TABLE_ID=100
 ip rule del from ${WG_SUBNET} table ${TABLE_ID} 2>/dev/null || true
@@ -192,31 +192,39 @@ ip -4 route flush table ${TABLE_ID} 2>/dev/null || true
 ip rule add from ${WG_SUBNET} lookup ${TABLE_ID} priority 100
 ip -4 route add default dev tun0 table ${TABLE_ID}
 
-# Đảm bảo tuyến tới SOCKS đi thẳng qua gateway WAN (không vòng qua tun0)
+# Đảm bảo tuyến tới SOCKS đi thẳng gateway WAN (không vòng qua tun0)
 GATEWAY=$(ip route | awk '/^default/ && /dev '"$WAN_INTERFACE"'/ {print $3; exit}')
 if [ -z "$GATEWAY" ]; then
   echo "Không tìm thấy default gateway cho ${WAN_INTERFACE}"; exit 1
 fi
 ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
 
-# Khởi chạy tun2socks (bản xjasonlyu): dùng -device và -proxy
-pkill -f tun2socks 2>/dev/null || true
+# Khai báo proxy qua biến môi trường ALL_PROXY (bản này KHÔNG có -proxy/-proxyServer)
+export ALL_PROXY="socks5://${PROXY_SOCKS_SERVER}"
+
+# Dọn tiến trình/log cũ
+pkill -f '/usr/local/bin/tun2socks' 2>/dev/null || true
 rm -f /var/log/tun2socks.log 2>/dev/null || true
 
+# Chạy tun2socks: trùng khớp với tun0 đã tạo 198.18.0.1/30 (host giữ .1, tun2socks dùng .2)
 nohup /usr/local/bin/tun2socks \
   -loglevel debug \
-  -device "tun://tun0" \
-  -proxy "socks5://${PROXY_SOCKS_SERVER}" \
-  -interface "${WG_INTERFACE}" \
+  -proxyType "socks" \
+  -tunName "tun0" \
+  -tunAddr "198.18.0.2" \
+  -tunGw   "198.18.0.1" \
+  -tunMask "255.255.255.252" \
+  -tunPersist \
   > /var/log/tun2socks.log 2>&1 &
 
 sleep 2
-if ! pgrep -f tun2socks >/dev/null; then
+if ! pgrep -f '/usr/local/bin/tun2socks' >/dev/null; then
   echo "tun2socks không chạy! In 80 dòng log cuối để chẩn đoán:"
   tail -n 80 /var/log/tun2socks.log || true
   exit 1
 fi
 echo "Đã khởi động tun2socks (log: /var/log/tun2socks.log)."
+
 
 
 
