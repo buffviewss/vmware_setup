@@ -167,6 +167,7 @@ if [ ! -f $HOME/go/src/github.com/eycorsican/go-tun2socks/cmd/tun2socks/tun2sock
 fi
 
 echo "10. Kích hoạt WireGuard (wg-quick up wg0)..."
+wg-quick down wg0 2>/dev/null || true
 wg-quick up wg0
 
 # Kiểm tra interface wg0 đã lên
@@ -208,5 +209,3 @@ echo "Endpoint = ${LAN_IP%%/*}:51820"
 echo "AllowedIPs = 0.0.0.0/0"
 echo "--------------------------------------------------------------------"
 echo "Lưu ý: Thay ${LAN_IP%%/*} bằng IP LAN của server nếu khác."
-
-wg-quick down wg0 2>/dev/null || true
