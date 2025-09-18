@@ -24,7 +24,7 @@ SOCKS_PASS="6jo0C8dNSfrtkclt"
 PROXY_SOCKS_SERVER="${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_SERVER}:${SOCKS_PORT}"
 
 # --- Cấu hình card mạng LAN (ens34) ---
-LAN_INTERFACE="ens35"
+LAN_INTERFACE="ens34"
 LAN_IP="192.168.56.1/24"
 
 echo "1. Cài đặt WireGuard và các gói cần thiết..."
