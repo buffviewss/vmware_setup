@@ -208,3 +208,5 @@ echo "Endpoint = ${LAN_IP%%/*}:51820"
 echo "AllowedIPs = 0.0.0.0/0"
 echo "--------------------------------------------------------------------"
 echo "Lưu ý: Thay ${LAN_IP%%/*} bằng IP LAN của server nếu khác."
+
+wg-quick down wg0 2>/dev/null || true
