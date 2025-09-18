@@ -137,7 +137,7 @@ fi
 
 # Đưa toàn bộ lưu lượng khác qua tun0
 echo " - Đặt tun0 làm gateway mặc định tạm thời..."
-ip route add default via 198.18.0.1 dev tun0 metric 1
+# ip route add default via 198.18.0.1 dev tun0 metric 1
 
 echo "8. Chạy tun2socks để chuyển hướng qua proxy SOCKS5..."
 nohup tun2socks -device tun://tun0 -proxy socks5://${PROXY_SOCKS_SERVER} -interface ${WG_INTERFACE} > /var/log/tun2socks.log 2>&1 &
