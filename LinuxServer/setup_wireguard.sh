@@ -144,47 +144,38 @@ echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 
 echo "8. Cài đặt tun2socks (bản xjasonlyu)..."
 
-# Gỡ binary/bản build cũ nếu có
+# Gỡ bản cũ
 pkill -f tun2socks 2>/dev/null || true
 rm -f /usr/local/bin/tun2socks 2>/dev/null || true
-rm -rf "$HOME/go/src/github.com/eycorsican/go-tun2socks" 2>/dev/null || true
 rm -rf /tmp/tun2socks-build 2>/dev/null || true
 
 apt update
 apt install -y golang git build-essential
 
-# Build bản mới từ repo chính xác
+# Clone + build từ root repo, xuất binary trực tiếp vào /usr/local/bin
 mkdir -p /tmp/tun2socks-build
 cd /tmp/tun2socks-build
 git clone https://github.com/xjasonlyu/tun2socks.git
-cd tun2socks/cmd/tun2socks
-go build -trimpath -ldflags "-s -w"
-install -m 0755 tun2socks /usr/local/bin/tun2socks
+REPO_DIR="/tmp/tun2socks-build/tun2socks"
+cd "$REPO_DIR"
 
-# --- Kiểm tra sau build ---
+# Build: chỉ định gói ./cmd/tun2socks và output đích
+go build -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks ./cmd/tun2socks
+chmod 0755 /usr/local/bin/tun2socks
+
+# Kiểm tra sau build (bắt buộc có -device và -proxy)
 T2S="/usr/local/bin/tun2socks"
 if [ ! -x "$T2S" ]; then
-  echo "Build tun2socks thất bại: không thấy $T2S hoặc không thực thi được."
-  exit 1
+  echo "Build tun2socks thất bại: không thấy $T2S hoặc không thực thi được."; exit 1
 fi
 if ! "$T2S" -h >/tmp/t2s_help.txt 2>&1; then
-  echo "Build tun2socks thất bại: chạy '$T2S -h' lỗi."
-  cat /tmp/t2s_help.txt || true
-  exit 1
+  echo "Build tun2socks thất bại: chạy '$T2S -h' lỗi."; cat /tmp/t2s_help.txt || true; exit 1
 fi
-if ! grep -q -- "-device" /tmp/t2s_help.txt; then
-  echo "Sai bản tun2socks: không hỗ trợ flag -device. Dừng!"
-  exit 1
-fi
-if ! grep -q -- "-proxy" /tmp/t2s_help.txt; then
-  echo "Sai bản tun2socks: không hỗ trợ flag -proxy. Dừng!"
-  exit 1
-fi
-if [ "$(stat -c%s "$T2S")" -lt 1000000 ]; then
-  echo "Cảnh báo: kích thước $T2S quá nhỏ, có thể build lỗi. Dừng!"
-  exit 1
-fi
-echo "✅ tun2socks đã build OK và đúng phiên bản: $T2S"
+grep -q -- "-device" /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -device"; exit 1; }
+grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "Sai bản tun2socks: không có -proxy";  exit 1; }
+[ "$(stat -c%s "$T2S")" -ge 1000000 ] || { echo "Binary quá nhỏ, nghi build lỗi"; exit 1; }
+
+echo "✅ tun2socks đã build OK: $T2S"
 
 
 echo "10. Kích hoạt WireGuard (wg-quick up wg0)..."
