@@ -134,6 +134,7 @@ GATEWAY=$(ip route | awk '/^default/ {print $3}')
 # Thêm route cho SOCKS proxy qua gateway gốc (tránh lặp vòng)
 if [ -n "${PROXY_SOCKS_SERVER}" ] && [ "${PROXY_SOCKS_SERVER}" != "127.0.0.1" ]; then
   echo " - Đường dẫn riêng cho proxy SOCKS5 ${PROXY_SOCKS_SERVER} qua gateway gốc..."
+  ip route del ${SOCKS_SERVER} 2>/dev/null || true
   ip route add ${SOCKS_SERVER} via ${GATEWAY} dev ${WG_INTERFACE}
 fi
 
