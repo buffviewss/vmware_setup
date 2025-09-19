@@ -230,33 +230,41 @@ fi
 
 echo "11. Khởi động tun2socks..."
 
-# Bảo đảm module TUN và bảng định tuyến riêng (ID 100)
-modprobe tun || true
+# YÊU CẦU: đã tạo tun0 = 198.18.0.1/30, wg0 đã up
+# Các biến đã có từ trên: WAN_INTERFACE, WG_INTERFACE, SOCKS_SERVER, PROXY_SOCKS_SERVER, WG_IPV4 (10.0.0.1/24)
+
+# 11.1 Bảo đảm TUN & bảng định tuyến riêng
+modprobe tun 2>/dev/null || true
 if ! grep -qE '^[[:space:]]*100[[:space:]]+wgproxy$' /etc/iproute2/rt_tables; then
   echo "100 wgproxy" >> /etc/iproute2/rt_tables
 fi
 
-# Policy routing: chỉ đẩy lưu lượng TỪ mạng WG vào tun0 (không đổi default route toàn máy)
-WG_SUBNET="10.0.0.0/24"        # khớp với WG_IPV4=10.0.0.1/24
+# 11.2 Policy routing: chỉ đẩy lưu lượng TỪ mạng WG vào tun0 (không đổi default route toàn máy)
+WG_SUBNET="${WG_IPV4%/*}/24"   # suy ra 10.0.0.0/24 nếu WG_IPV4=10.0.0.1/24
 TABLE_ID=100
 ip rule del from ${WG_SUBNET} table ${TABLE_ID} 2>/dev/null || true
 ip -4 route flush table ${TABLE_ID} 2>/dev/null || true
 ip rule add from ${WG_SUBNET} lookup ${TABLE_ID} priority 100
 ip -4 route add default dev tun0 table ${TABLE_ID}
 
-# Đảm bảo tuyến tới SOCKS đi thẳng qua gateway thật của WAN (tránh vòng qua tun0)
+# 11.3 Đảm bảo tuyến tới SOCKS đi thẳng qua gateway WAN (tránh vòng qua tun0)
 GATEWAY=$(ip route | awk '/^default/ && /dev '"$WAN_INTERFACE"'/ {print $3; exit}')
 if [ -z "$GATEWAY" ]; then
   echo "Không tìm thấy default gateway cho ${WAN_INTERFACE}"; exit 1
 fi
 ip route replace ${SOCKS_SERVER} via ${GATEWAY} dev ${WAN_INTERFACE}
 
-# Khởi chạy tun2socks (bản xjasonlyu) với đường dẫn tuyệt đối để tránh đụng PATH cũ
-pkill -f '/usr/local/bin/tun2socks' 2>/dev/null || true
+# 11.4 Khởi động tun2socks (xjasonlyu/v2) với đường dẫn tuyệt đối
+T2S="/usr/local/bin/tun2socks"
+if ! "$T2S" -h 2>&1 | grep -q -- "-device"; then
+  echo "tun2socks không đúng phiên bản (thiếu -device). Kiểm tra lại phần cài đặt (phần 8)."
+  exit 1
+fi
+
+pkill -f "$T2S" 2>/dev/null || true
 rm -f /var/log/tun2socks.log 2>/dev/null || true
 
-# Host giữ tun0: 198.18.0.1/30; tun2socks dùng cùng device qua -device, không cần set tunAddr ở đây
-nohup /usr/local/bin/tun2socks \
+nohup "$T2S" \
   -loglevel debug \
   -device "tun://tun0" \
   -proxy  "socks5://${PROXY_SOCKS_SERVER}" \
@@ -264,7 +272,7 @@ nohup /usr/local/bin/tun2socks \
   > /var/log/tun2socks.log 2>&1 &
 
 sleep 2
-if ! pgrep -f '/usr/local/bin/tun2socks' >/dev/null; then
+if ! pgrep -f "$T2S" >/dev/null; then
   echo "tun2socks không chạy! In 100 dòng log cuối để chẩn đoán:"
   tail -n 100 /var/log/tun2socks.log || true
   exit 1
