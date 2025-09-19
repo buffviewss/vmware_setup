@@ -156,25 +156,26 @@ apt install -y curl ca-certificates git build-essential
 rm -rf /usr/local/go 2>/dev/null || true
 
 cd /tmp
-# Thử tải Go 1.25.x từ các nguồn chính thức, nếu không tải được sẽ thử phiên bản khác
-for V in 1.25.5 1.25.4 1.25.3 1.25.2 1.25.1 1.25.0; do
-  TGZ="go${V}.linux-amd64.tar.gz"
-  URL1="https://go.dev/dl/${TGZ}"
-  URL2="https://storage.googleapis.com/golang/${TGZ}"
-  echo " - Thử tải ${TGZ} ..."
-  if curl -fsSLO "$URL1" || curl -fsSLO "$URL2"; then
-    echo "   -> OK, giải nén ${TGZ}"
-    tar -C /usr/local -xzf "${TGZ}"
-    break
-  fi
-done
+# Tải Go chính thức từ go.dev hoặc storage.googleapis
+TGZ="go1.25.1.linux-amd64.tar.gz"
+URL1="https://go.dev/dl/${TGZ}"
+URL2="https://storage.googleapis.com/golang/${TGZ}"
 
-# Thiết lập biến PATH cho Go
+echo " - Tải Go từ URL1: $URL1"
+if ! curl -fsSLO "$URL1"; then
+  echo "   - Không tải được từ $URL1, thử URL2."
+  curl -fsSLO "$URL2" || { echo "❌ Không tải được Go"; exit 1; }
+fi
+
+# Giải nén Go vào thư mục /usr/local
+tar -C /usr/local -xzf "${TGZ}"
+
+# Cài đặt PATH cho Go
 export PATH="/usr/local/go/bin:${PATH}"
 echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
 chmod 0644 /etc/profile.d/go.sh
 
-# Kiểm tra Go đã được cài thành công
+# Kiểm tra Go đã cài thành công
 go version | grep -q 'go1\.25' || { echo "❌ Cần Go >= 1.25"; exit 1; }
 
 # 2) Dọn cũ và clone lại repo
