@@ -187,31 +187,20 @@ cd /tmp/tun2socks-build
 git clone https://github.com/xjasonlyu/tun2socks.git
 REPO="/tmp/tun2socks-build/tun2socks"
 
-# 3) Dò thư mục CLI trong cmd/* và xây dựng lại
-cd "$REPO"
+# 3) Kiểm tra thư mục cmd
+echo "Danh sách thư mục trong repo:"
+ls -la "$REPO/cmd"
 
-# Dò tên thư mục phù hợp với CLI (tun2socks), nếu không có, tự dò thư mục trong cmd/
-CANDIDATE=$(find cmd -maxdepth 1 -type d -printf '%f\n' | grep -Ei '^(tun2socks|tun[-_]*socks)$' | head -n1)
-
-# Nếu không khớp các tên trên, tự tìm thư mục duy nhất trong cmd/
-if [ -z "$CANDIDATE" ]; then
-  CNT=$(find cmd -maxdepth 1 -mindepth 1 -type d | wc -l)
-  if [ "$CNT" -eq 1 ]; then
-    CANDIDATE=$(basename "$(find cmd -maxdepth 1 -mindepth 1 -type d)")
-  fi
-fi
-
-if [ -z "$CANDIDATE" ] || [ ! -d "cmd/$CANDIDATE" ]; then
-  echo "❌ Không tìm thấy thư mục CLI trong repo, cmd/:"
-  ls -la cmd
+# Kiểm tra thư mục chính có sẵn
+if [ ! -d "$REPO/cmd/tun2socks" ]; then
+  echo "❌ Không tìm thấy thư mục cmd/tun2socks trong repo!"
   exit 1
 fi
-echo "👉 Sẽ build từ: cmd/${CANDIDATE}"
 
 # 4) Build ra /usr/local/bin/tun2socks
 export GOTOOLCHAIN=local
 export CGO_ENABLED=0
-go build -C "$REPO/cmd/${CANDIDATE}" -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks
+go build -C "$REPO/cmd/tun2socks" -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks
 
 # 5) Kiểm tra sau build
 T2S="/usr/local/bin/tun2socks"
