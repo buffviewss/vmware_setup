@@ -144,21 +144,24 @@ echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 
 
 
-echo "8. Cài Go 1.25.x và build tun2socks (v2) bằng go install..."
+echo "8. Cài đặt Go 1.25.x và tun2socks (v2) bằng go install..."
 
 set -euo pipefail
 
 # 1) Chuẩn bị Go 1.25.x
 apt update
 apt install -y curl ca-certificates git build-essential
+
+# Gỡ Go cũ, nếu có
 rm -rf /usr/local/go 2>/dev/null || true
 
 cd /tmp
+# Thử tải Go 1.25.x từ các nguồn chính thức, nếu không tải được sẽ thử phiên bản khác
 for V in 1.25.5 1.25.4 1.25.3 1.25.2 1.25.1 1.25.0; do
   TGZ="go${V}.linux-amd64.tar.gz"
   URL1="https://go.dev/dl/${TGZ}"
   URL2="https://storage.googleapis.com/golang/${TGZ}"
-  echo " - Tải ${TGZ} ..."
+  echo " - Thử tải ${TGZ} ..."
   if curl -fsSLO "$URL1" || curl -fsSLO "$URL2"; then
     echo "   -> OK, giải nén ${TGZ}"
     tar -C /usr/local -xzf "${TGZ}"
@@ -166,23 +169,56 @@ for V in 1.25.5 1.25.4 1.25.3 1.25.2 1.25.1 1.25.0; do
   fi
 done
 
+# Thiết lập biến PATH cho Go
 export PATH="/usr/local/go/bin:${PATH}"
 echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
 chmod 0644 /etc/profile.d/go.sh
+
+# Kiểm tra Go đã được cài thành công
 go version | grep -q 'go1\.25' || { echo "❌ Cần Go >= 1.25"; exit 1; }
 
-# 2) Cài tun2socks v2 -> /usr/local/bin (KHÔNG cần clone, KHÔNG cần cd)
-pkill -f tun2socks 2>/dev/null || true
-rm -f /usr/local/bin/tun2socks 2>/dev/null || true
+# 2) Dọn cũ và clone lại repo
+sudo pkill -f tun2socks 2>/dev/null || true
+sudo rm -f /usr/local/bin/tun2socks 2>/dev/null || true
+rm -rf /tmp/tun2socks-build
+mkdir -p /tmp/tun2socks-build
+cd /tmp/tun2socks-build
+git clone https://github.com/xjasonlyu/tun2socks.git
+REPO="/tmp/tun2socks-build/tun2socks"
 
-go env -w GOTOOLCHAIN=local
+# 3) Dò thư mục CLI trong cmd/* và xây dựng lại
+cd "$REPO"
+
+# Dò tên thư mục phù hợp với CLI (tun2socks), nếu không có, tự dò thư mục trong cmd/
+CANDIDATE=$(find cmd -maxdepth 1 -type d -printf '%f\n' | grep -Ei '^(tun2socks|tun[-_]*socks)$' | head -n1)
+
+# Nếu không khớp các tên trên, tự tìm thư mục duy nhất trong cmd/
+if [ -z "$CANDIDATE" ]; then
+  CNT=$(find cmd -maxdepth 1 -mindepth 1 -type d | wc -l)
+  if [ "$CNT" -eq 1 ]; then
+    CANDIDATE=$(basename "$(find cmd -maxdepth 1 -mindepth 1 -type d)")
+  fi
+fi
+
+if [ -z "$CANDIDATE" ] || [ ! -d "cmd/$CANDIDATE" ]; then
+  echo "❌ Không tìm thấy thư mục CLI trong repo, cmd/:"
+  ls -la cmd
+  exit 1
+fi
+echo "👉 Sẽ build từ: cmd/${CANDIDATE}"
+
+# 4) Build ra /usr/local/bin/tun2socks
+export GOTOOLCHAIN=local
 export CGO_ENABLED=0
-GOBIN=/usr/local/bin go install github.com/xjasonlyu/tun2socks/v2/cmd/tun2socks@latest
-chmod 0755 /usr/local/bin/tun2socks
+go build -C "$REPO/cmd/${CANDIDATE}" -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks
 
-# 3) Kiểm tra binary đúng phiên bản (phải có -device và -proxy)
-if ! /usr/local/bin/tun2socks -h >/tmp/t2s_help.txt 2>&1; then
-  echo "❌ tun2socks -h lỗi:"; cat /tmp/t2s_help.txt; exit 1
+# 5) Kiểm tra sau build
+T2S="/usr/local/bin/tun2socks"
+if [ ! -x "$T2S" ]; then
+  echo "❌ Không thấy $T2S hoặc không thực thi được."; exit 1
+fi
+if ! "$T2S" -h >/tmp/t2s_help.txt 2>&1; then
+  echo "❌ Chạy '$T2S -h' lỗi:"; cat /tmp/t2s_help.txt; exit 1
 fi
 grep -q -- "-device" /tmp/t2s_help.txt || { echo "❌ thiếu flag -device (sai bản)"; exit 1; }
 grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "❌ thiếu flag -proxy (sai bản)";  exit 1; }
