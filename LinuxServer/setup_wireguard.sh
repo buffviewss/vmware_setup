@@ -144,75 +144,51 @@ echo " - Đặt tun0 làm gateway mặc định tạm thời..."
 
 
 
-echo "8. Cài đặt Go 1.25.x và tun2socks (bản xjasonlyu), chống lỗi 404..."
+echo "8. Cài Go 1.25.x và build tun2socks (v2) bằng go install..."
 
 set -euo pipefail
 
-# Dọn dẹp bản cũ
-pkill -f tun2socks 2>/dev/null || true
-rm -f /usr/local/bin/tun2socks 2>/dev/null || true
-rm -rf /tmp/tun2socks-build 2>/dev/null || true
+# 1) Chuẩn bị Go 1.25.x
+apt update
+apt install -y curl ca-certificates git build-essential
 rm -rf /usr/local/go 2>/dev/null || true
 
-# Cài đặt Go từ Snap nếu có
-if command -v snap >/dev/null 2>&1; then
-  echo " - Cài Go qua snap channel 1.25/stable..."
-  snap install go --classic --channel=1.25/stable || true
-fi
+cd /tmp
+for V in 1.25.5 1.25.4 1.25.3 1.25.2 1.25.1 1.25.0; do
+  TGZ="go${V}.linux-amd64.tar.gz"
+  URL1="https://go.dev/dl/${TGZ}"
+  URL2="https://storage.googleapis.com/golang/${TGZ}"
+  echo " - Tải ${TGZ} ..."
+  if curl -fsSLO "$URL1" || curl -fsSLO "$URL2"; then
+    echo "   -> OK, giải nén ${TGZ}"
+    tar -C /usr/local -xzf "${TGZ}"
+    break
+  fi
+done
 
-# Nếu chưa có go hoặc Snap không cài được, tải tarball Go 1.25
-if ! command -v go >/dev/null 2>&1 || ! go version 2>/dev/null | grep -q 'go1\.25'; then
-  echo " - Cài Go qua tarball..."
-  cd /tmp
-  # Thử lần lượt các phiên bản 1.25.x để tránh lỗi 404
-  for V in 1.25.5 1.25.4 1.25.3 1.25.2 1.25.1 1.25.0; do
-    TGZ="go${V}.linux-amd64.tar.gz"
-    URL1="https://go.dev/dl/${TGZ}"
-    URL2="https://storage.googleapis.com/golang/${TGZ}"
-    echo "   * Thử tải ${TGZ} ..."
-    if curl -fsSLO "$URL1" || curl -fsSLO "$URL2"; then
-      echo "   -> Tải thành công ${TGZ}"
-      tar -C /usr/local -xzf "${TGZ}"
-      break
-    fi
-  done
-  export PATH="/usr/local/go/bin:${PATH}"
-  echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
-  chmod 0644 /etc/profile.d/go.sh
-fi
+export PATH="/usr/local/go/bin:${PATH}"
+echo 'export PATH=/usr/local/go/bin:$PATH' >/etc/profile.d/go.sh
+chmod 0644 /etc/profile.d/go.sh
+go version | grep -q 'go1\.25' || { echo "❌ Cần Go >= 1.25"; exit 1; }
 
-# Kiểm tra Go
-go version
-if ! go version | grep -q 'go1\.25'; then
-  echo "❌ Cần Go >= 1.25 để build tun2socks. Dừng!"
-  exit 1
-fi
+# 2) Cài tun2socks v2 -> /usr/local/bin (KHÔNG cần clone, KHÔNG cần cd)
+pkill -f tun2socks 2>/dev/null || true
+rm -f /usr/local/bin/tun2socks 2>/dev/null || true
 
-# --- Clone + build tun2socks ---
-mkdir -p /tmp/tun2socks-build
-cd /tmp/tun2socks-build
-git clone https://github.com/xjasonlyu/tun2socks.git
-REPO_DIR="/tmp/tun2socks-build/tun2socks"
-cd "$REPO_DIR"
-
-# Không cho Go tự kéo toolchain khác (đã là 1.25 rồi)
-export GOTOOLCHAIN=local
+go env -w GOTOOLCHAIN=local
 export CGO_ENABLED=0
-
-go build -trimpath -ldflags "-s -w" -o /usr/local/bin/tun2socks ./cmd/tun2socks
+GOBIN=/usr/local/bin go install github.com/xjasonlyu/tun2socks/v2/cmd/tun2socks@latest
 chmod 0755 /usr/local/bin/tun2socks
 
-# --- Kiểm tra hậu build ---
-T2S="/usr/local/bin/tun2socks"
-if [ ! -x "$T2S" ]; then
-  echo "❌ Không thấy $T2S hoặc không thực thi được."; exit 1
+# 3) Kiểm tra binary đúng phiên bản (phải có -device và -proxy)
+if ! /usr/local/bin/tun2socks -h >/tmp/t2s_help.txt 2>&1; then
+  echo "❌ tun2socks -h lỗi:"; cat /tmp/t2s_help.txt; exit 1
 fi
-if ! "$T2S" -h >/tmp/t2s_help.txt 2>&1; then
-  echo "❌ Chạy '$T2S -h' lỗi:"; cat /tmp/t2s_help.txt || true; exit 1
-fi
-grep -q -- "-device" /tmp/t2s_help.txt || { echo "❌ Sai bản tun2socks: thiếu -device"; exit 1; }
-grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "❌ Sai bản tun2socks: thiếu -proxy";  exit 1; }
-echo "✅ tun2socks đã build OK tại: $T2S"
+grep -q -- "-device" /tmp/t2s_help.txt || { echo "❌ thiếu flag -device (sai bản)"; exit 1; }
+grep -q -- "-proxy"  /tmp/t2s_help.txt || { echo "❌ thiếu flag -proxy (sai bản)";  exit 1; }
+
+echo "✅ ĐÃ CÀI /usr/local/bin/tun2socks (v2, hỗ trợ -device/-proxy)"
+
 
 
 
