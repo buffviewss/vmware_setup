@@ -1,37 +1,12 @@
-AU210
-Business name:        SOLUTIONS PARTNER
-Address for service of documents:        17 Attwood Way Rockingham WA 6168
-Holder(s) details:        Holder Name: Z INVESTMENTS HOLDING PTY LTDHolder Type: Body CorporateABN: 48 632 393 349
+AU230
 
 
-AU213
-
-Business name:        Z Furniture
-Address for service of documents:        ARAFURA MARKETING PTY LTD/TA Z FURNITURE UNIT 2 4 College Road Berrimah NT 0828
-Holder(s) details:        Holder Name: ARAFURA MARKETING PTY LTDHolder Type: Body CorporateABN: 94 082 748 605
-
-
-AU214
-
-Business name:        HOTEL Z      
-Address for service of documents:        Zagame Corporation Suite B Level L1 290 Burwood Rd Hawthorn VIC 3122
-Holder(s) details:        Holder Name: The Trustee for ZAGAME DOWNTOWNER TRUSTHolder Type: Other Unincorporated EntityABN: 36 090 158 354(External Link)
-
-AU216
-
-Business name:        Z Engineering Solution   
-Address for service of documents:        40 445-455 Liverpool Rd Ashfield NSW 2131
-Holder(s) details:        Holder Name: ZHI YEHolder Type: PersonABN: 40 609 785 954
-
-AU223
-
-Business name:        MISHANGHAI
-Address for service of documents:        PO BOX 881 Innaloo WA 6918 Australia
-Holder(s) details:        Holder Name: Z FOOD PTY LTDHolder Type: Body CorporateABN: 49 642 842 359
-
-AU226
-
-Business name:        FENG SHUI LAWS    
-Address for service of documents:        47 Langer Ave Caringbah South NSW 2229
-Holder(s) details:        Holder Name: ROXANNE RENEE LAWSHolder Type: PersonABN: 81 707 670 740
-
+Business name:        ARTEMIS MARKETING SOLUTIONS
+Status:        Registered
+Registration date:        16/01/2020
+Renewal date:        16/01/2022
+Cancelled date:        
+Cancellation under review:        
+Address for service of documents:        1 Continental Road Glenorchy TAS 7010
+Principal place of business:        Glenorchy TAS 7010
+Holder(s) details:        Holder Name: DEANNA ZACEKHolder Type: PersonABN: 39 392 574 050
