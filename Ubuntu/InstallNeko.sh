@@ -6,6 +6,10 @@
 
 set -e  # Stop if any command fails
 
+#Set system sang GB
+sudo locale-gen en_GB.UTF-8
+sudo update-locale LANG=en_GB.UTF-8
+
 # 1. Update & Upgrade
 echo "🔄 Updating system packages..."
 sudo add-apt-repository universe -y || true
@@ -202,4 +206,3 @@ else
 fi
 
 echo "🔎 Post-setup check completed!"
-
