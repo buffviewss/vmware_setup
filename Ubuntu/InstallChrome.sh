@@ -83,7 +83,7 @@ if [[ $BTYPE == "chrome" ]]; then
     echo "🚫 Tắt update nội bộ Chrome..."
     sudo rm -rf /opt/google/chrome/cron/
     sudo mkdir -p /etc/opt/chrome/policies/managed
-   cat <<EOF > /tmp/disable_update.json
+    cat <<EOF > /tmp/disable_update.json
 {
   "AutoUpdateCheckPeriodMinutes": 0,
   "DisableAutoUpdateChecksCheckbox": true,
