@@ -1,0 +1,411 @@
+#!/bin/bash
+set -euo pipefail
+
+log() {
+  printf '%s\n' "$1"
+}
+
+fix_password_issues() {
+  log "== Removing current user password =="
+  sudo passwd -d "$USER" || true
+
+  log "== Configuring passwordless sudo =="
+  echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee "/etc/sudoers.d/$USER" >/dev/null
+
+  log "== Enabling LightDM auto-login (Lubuntu) =="
+  sudo mkdir -p /etc/lightdm/lightdm.conf.d
+  sudo tee /etc/lightdm/lightdm.conf.d/50-autologin.conf >/dev/null <<EOF
+[Seat:*]
+autologin-user=$USER
+autologin-user-timeout=0
+autologin-session=Lubuntu
+EOF
+
+  log "== Enabling GDM3 auto-login (Ubuntu) =="
+  sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=$USER
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
+  log "== Removing desktop keyring packages =="
+  sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
+  sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
+
+  log "== Clearing keyring data from home directory =="
+  rm -rf "$HOME/.local/share/keyrings" 2>/dev/null || true
+  rm -rf "$HOME/.gnupg" 2>/dev/null || true
+  rm -rf "$HOME/.config/kwalletrc" 2>/dev/null || true
+
+  log "== Disabling PAM keyring integration =="
+  sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/login 2>/dev/null || true
+  sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/passwd 2>/dev/null || true
+  sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-password 2>/dev/null || true
+  sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-autologin 2>/dev/null || true
+
+  log "== Disabling PolicyKit password prompts for current user =="
+  sudo mkdir -p /etc/polkit-1/localauthority/50-local.d
+  sudo tee /etc/polkit-1/localauthority/50-local.d/disable-passwords.pkla >/dev/null <<EOF
+[Disable password prompts for $USER]
+Identity=unix-user:$USER
+Action=*
+ResultActive=yes
+ResultInactive=yes
+ResultAny=yes
+EOF
+
+  log "== Disabling Chrome password manager =="
+  mkdir -p "$HOME/.config/google-chrome/Default"
+  cat >"$HOME/.config/google-chrome/Default/Preferences" <<'EOF'
+{
+  "profile": {
+    "password_manager_enabled": false,
+    "default_content_setting_values": {
+      "password_manager": 2
+    }
+  }
+}
+EOF
+
+  log "== Disabling Firefox password prompts =="
+  firefox -CreateProfile "default" 2>/dev/null || true
+  sleep 2
+  pkill firefox 2>/dev/null || true
+  FF_PROFILE=$(find "$HOME/.mozilla/firefox" -name "*.default*" -type d 2>/dev/null | head -n 1)
+  if [[ -n "$FF_PROFILE" ]]; then
+    cat >"$FF_PROFILE/user.js" <<'EOF'
+user_pref("security.ask_for_password", 0);
+user_pref("security.password_lifetime", 9999);
+user_pref("signon.rememberSignons", false);
+user_pref("security.default_personal_cert", "");
+EOF
+  fi
+
+  log "== Disabling gnome-keyring systemd user services =="
+  systemctl --user disable gnome-keyring-daemon 2>/dev/null || true
+  systemctl --user stop gnome-keyring-daemon 2>/dev/null || true
+
+  log "== Replacing Chrome desktop entry to use basic password store =="
+  sudo rm -f /usr/share/applications/google-chrome.desktop 2>/dev/null || true
+  cat >"$HOME/.local/share/applications/google-chrome.desktop" <<'EOF'
+[Desktop Entry]
+Version=1.0
+Name=Google Chrome
+Comment=Access the Internet
+Exec=/usr/bin/google-chrome-stable --password-store=basic %U
+StartupNotify=true
+Terminal=false
+Icon=google-chrome
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;
+EOF
+  chmod +x "$HOME/.local/share/applications/google-chrome.desktop"
+
+  printf '\nAll password prompts should now be disabled.\n\n'
+  printf 'Remember to reboot the system: sudo reboot\n\n'
+  read -rp "Reboot now? (y/n): " REPLY
+  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+    sudo reboot
+  fi
+}
+
+ensure_gdown_env() {
+  if [[ ! -d "$HOME/gdown-venv" ]]; then
+    log "== Creating Python virtual environment for gdown =="
+    python3 -m venv "$HOME/gdown-venv"
+  fi
+  # shellcheck disable=SC1091
+  source "$HOME/gdown-venv/bin/activate"
+  pip install --no-cache-dir --upgrade gdown
+}
+
+install_browser_package() {
+  ensure_gdown_env
+
+  local chrome_drive_id="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
+  local firefox_drive_id="1CeMNJTLgfsaFkcroOh1xpxFC-uz9HrLb"
+  local download_dir="$HOME/browser_temp"
+  mkdir -p "$download_dir"
+  cd "$download_dir"
+
+  log "Select browser to install:"
+  select browser in "Chrome" "Firefox" "Exit"; do
+    case "$browser" in
+      Chrome)
+        drive_id="$chrome_drive_id"
+        btype="chrome"
+        break
+        ;;
+      Firefox)
+        drive_id="$firefox_drive_id"
+        btype="firefox"
+        break
+        ;;
+      Exit)
+        log "Leaving browser installation."
+        return
+        ;;
+      *)
+        log "Invalid selection."
+        ;;
+    esac
+  done
+
+  log "== Downloading $btype packages from Google Drive =="
+  gdown --folder "https://drive.google.com/drive/folders/$drive_id" --no-cookies
+
+  local -a file_list
+  if [[ "$btype" == "chrome" ]]; then
+    mapfile -t file_list < <(find "$download_dir" -type f -name "*.deb" | sort)
+  else
+    mapfile -t file_list < <(find "$download_dir" -type f | sort)
+  fi
+
+  if [[ ${#file_list[@]} -eq 0 ]]; then
+    log "No downloadable files detected."
+    return 1
+  fi
+
+  log "Downloaded files:"
+  local idx
+  for idx in "${!file_list[@]}"; do
+    printf '%d) %s\n' "$((idx + 1))" "${file_list[$idx]}"
+  done
+
+  local choice
+  read -rp "Enter file number to install: " choice
+  if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#file_list[@]} )); then
+    log "Invalid choice."
+    return 1
+  fi
+
+  local file_select="${file_list[$((choice - 1))]}"
+  log "Selected file: $file_select"
+
+  for path in "${file_list[@]}"; do
+    if [[ "$path" != "$file_select" ]]; then
+      rm -f -- "$path"
+    fi
+  done
+
+  log "== Removing existing browser installation =="
+  if [[ "$btype" == "chrome" ]]; then
+    sudo apt remove -y google-chrome-stable || true
+  else
+    sudo snap remove firefox || sudo apt remove -y firefox || true
+  fi
+
+  if [[ "$btype" == "chrome" ]]; then
+    log "== Installing Chrome from local package =="
+    sudo dpkg -i "$file_select"
+    sudo apt -f install -y
+    sudo apt-mark hold google-chrome-stable
+    sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
+    log "== Disabling Chrome auto updates =="
+    sudo rm -rf /opt/google/chrome/cron/
+    sudo mkdir -p /etc/opt/chrome/policies/managed
+    cat <<EOF >/tmp/disable_update.json
+{
+  "AutoUpdateCheckPeriodMinutes": 0,
+  "DisableAutoUpdateChecksCheckbox": true,
+  "MetricsReportingEnabled": false
+}
+EOF
+    sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
+    sudo chmod -R 000 /opt/google/chrome/cron || true
+  else
+    log "== Installing Firefox custom build =="
+    tar -xf "$file_select"
+    sudo rm -rf /opt/firefox_custom
+    sudo mv firefox /opt/firefox_custom
+    sudo ln -sf /opt/firefox_custom/firefox /usr/local/bin/firefoxcustom
+    log "== Disabling Firefox auto updates =="
+    sudo mkdir -p /opt/firefox_custom/distribution
+    cat <<'EOF2' | sudo tee /opt/firefox_custom/distribution/policies.json >/dev/null
+{
+  "policies": {
+    "AppAutoUpdate": false,
+    "DisableAppUpdate": true,
+    "ManualAppUpdateOnly": true
+  }
+}
+EOF2
+    sudo mkdir -p /opt/firefox_custom/browser/defaults/preferences
+    echo 'pref("app.update.enabled", false);' | sudo tee /opt/firefox_custom/browser/defaults/preferences/disable_update.js >/dev/null
+  fi
+
+  log "== Creating desktop shortcut =="
+  mkdir -p "$HOME/.local/share/applications"
+  if [[ "$btype" == "chrome" ]]; then
+    cat <<'EOF3' >"$HOME/.local/share/applications/browser_custom.desktop"
+[Desktop Entry]
+Name=Google Chrome (Custom)
+Exec=/usr/bin/google-chrome-stable %U
+Icon=google-chrome
+Type=Application
+Categories=Network;WebBrowser;
+StartupNotify=true
+EOF3
+  else
+    cat <<'EOF3' >"$HOME/.local/share/applications/browser_custom.desktop"
+[Desktop Entry]
+Name=Firefox (Custom)
+Exec=/usr/local/bin/firefoxcustom %U
+Icon=/opt/firefox_custom/browser/chrome/icons/default/default128.png
+Type=Application
+Categories=Network;WebBrowser;
+StartupNotify=true
+EOF3
+  fi
+
+  if command -v gsettings >/dev/null 2>&1; then
+    gio set "$HOME/.local/share/applications/browser_custom.desktop" metadata::trusted true 2>/dev/null || true
+    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
+  else
+    log "Pin to panel manually if needed (e.g. on LXQt)."
+  fi
+
+  log "Browser installation completed."
+}
+
+setup_nekobox() {
+  log "== Setting system locale to en_GB.UTF-8 =="
+  sudo locale-gen en_GB.UTF-8
+  sudo update-locale LANG=en_GB.UTF-8
+
+  log "== Updating system packages =="
+  sudo add-apt-repository universe -y || true
+  sudo apt update
+  sudo apt upgrade -y
+
+  log "== Installing Open VM Tools =="
+  sudo apt install -y open-vm-tools open-vm-tools-desktop || log "Warning: Open VM Tools may be unavailable."
+
+  log "== Installing gdown, unzip, python venv =="
+  sudo apt install -y python3-pip unzip python3-venv
+  if ! command -v pip3 >/dev/null 2>&1; then
+    sudo apt install -y python3-pip
+  fi
+  python3 -m venv "$HOME/venv"
+  # shellcheck disable=SC1091
+  source "$HOME/venv/bin/activate"
+  pip install --upgrade pip gdown
+
+  log "== Installing build tools and Qt5 libraries =="
+  sudo apt install -y build-essential \
+    libqt5network5 \
+    libqt5core5a \
+    libqt5gui5 \
+    libqt5widgets5 \
+    qtbase5-dev \
+    libqt5x11extras5 \
+    libqt5quick5 \
+    libqt5quickwidgets5 \
+    libqt5quickparticles5
+
+  log "== Preparing Nekoray directory =="
+  rm -rf "$HOME/Downloads/nekoray"
+  mkdir -p "$HOME/Downloads/nekoray"
+
+  log "== Downloading Nekobox package from Google Drive =="
+  cd "$HOME/Downloads"
+  local file_id="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"
+  gdown --id "$file_id" -O nekobox.zip
+
+  log "== Extracting Nekobox archive =="
+  unzip -o nekobox.zip -d "$HOME/Downloads/nekoray"
+
+  local inner_dir
+  inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
+  if [[ -n "$inner_dir" && "$inner_dir" != "$HOME/Downloads/nekoray" ]]; then
+    log "== Flattening Nekoray directory structure =="
+    shopt -s dotglob nullglob
+    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true
+    shopt -u dotglob nullglob
+    rm -rf "$inner_dir"
+  fi
+
+  log "== Setting execution permissions =="
+  cd "$HOME/Downloads/nekoray"
+  chmod +x launcher nekobox nekobox_core 2>/dev/null || log "Some binaries missing during chmod."
+
+  log "== Creating desktop shortcut for Nekobox =="
+  cat <<EOF >"$HOME/Desktop/nekoray.desktop"
+[Desktop Entry]
+Version=1.0
+Name=Nekobox
+Comment=Open Nekobox
+Exec=$HOME/Downloads/nekoray/nekobox
+Icon=$HOME/Downloads/nekoray/nekobox.png
+Terminal=false
+Type=Application
+Categories=Utility;
+EOF
+  chmod +x "$HOME/Desktop/nekoray.desktop"
+
+  log "== Pinning Nekobox and enabling autostart =="
+  if [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then
+    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
+  elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt ]]; then
+    log "LXQt detected. Pin manually from the menu."
+  else
+    log "Unknown desktop environment: ${XDG_CURRENT_DESKTOP:-unknown}. Skipping pinning."
+  fi
+
+  mkdir -p "$HOME/.config/autostart"
+  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"
+  chmod +x "$HOME/.config/autostart/nekoray.desktop"
+
+  log "== Launching Nekobox =="
+  ./nekobox || log "Unable to launch Nekobox automatically."
+
+  log "== Post-install checks =="
+  for pkg in open-vm-tools open-vm-tools-desktop python3-pip unzip build-essential qtbase5-dev; do
+    if dpkg -l | grep -q "^ii\s*$pkg"; then
+      log "$pkg installed"
+    else
+      log "$pkg missing"
+    fi
+  done
+
+  log "Python version: $(python3 --version 2>/dev/null || echo 'not found')"
+  log "pip version: $(pip3 --version 2>/dev/null || echo 'not found')"
+
+  if python3 -m pip show gdown >/dev/null 2>&1; then
+    log "gdown installed"
+  else
+    log "gdown missing"
+  fi
+
+  if [[ -d "$HOME/Downloads/nekoray" ]]; then
+    log "Nekoray folder present"
+  else
+    log "Nekoray folder missing"
+  fi
+
+  if [[ -f "$HOME/Desktop/nekoray.desktop" ]]; then
+    log "Desktop shortcut present"
+  else
+    log "Desktop shortcut missing"
+  fi
+
+  log "Nekobox setup completed."
+}
+
+main() {
+  fix_password_issues
+  install_browser_package
+  setup_nekobox
+  log "All tasks completed."
+}
+
+main "$@"
