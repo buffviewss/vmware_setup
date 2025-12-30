@@ -622,6 +622,7 @@ if [[ -z "${MASTER:-}" ]]; then
 fi
 
 
+
 # Nếu ép 6/8 kênh nhưng master là analog-stereo hoặc bluetooth thì hạ về 2 kênh cho an toàn
 if [[ "$CH" -ge 6 ]]; then
   if [[ "$MASTER" == *"analog-stereo"* || "$MASTER" == *"bluez_output"* ]]; then
