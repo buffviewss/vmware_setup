@@ -61,16 +61,12 @@ echo "📦 Installing Open VM Tools..."
 sudo apt install -y open-vm-tools open-vm-tools-desktop || echo "⚠️ Warning: Open VM Tools not found for this Ubuntu version."
 
 # 3. Install gdown and unzip
-echo "📦 Installing gdown & unzip..."
+echo "📦 Installing gdown & unzip (user-level)..."
+
 sudo apt install -y python3-pip unzip
-if ! command -v pip3 &> /dev/null; then
-    echo "⚠️ pip3 missing, installing..."
-    sudo apt install -y python3-pip
-fi
-sudo apt install python3-venv -y
-python3 -m venv ~/venv
-source ~/venv/bin/activate
-pip install --upgrade pip gdown
+
+python3 -m pip install --user --upgrade pip gdown
+
 
 
 # 4. Install core build tools and Qt5 libraries
@@ -97,7 +93,7 @@ cd ~/Downloads
 
 # ⚠️ Thay ID này bằng ID thực tế của file Nekobox trên Google Drive!
 FILE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"  
-gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Download failed! Check Google Drive file ID."; exit 1; }
+python3 -m gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Download failed! Check Google Drive file ID."; exit 1; }
 
 # 7. Extract Nekobox
 echo "📂 Extracting Nekobox..."
