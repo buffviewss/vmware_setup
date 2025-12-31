@@ -34,7 +34,10 @@ done
 
 # === Tải toàn bộ folder từ Google Drive ===
 echo "📥 Đang tải toàn bộ folder $BTYPE từ Google Drive..."
-python3 -m gdown --folder "https://drive.google.com/drive/folders/$DRIVE_ID" --no-cookies
+"$HOME/.local/bin/gdown" --folder \
+"https://drive.google.com/drive/folders/$DRIVE_ID" \
+--no-cookies
+
 
 
 # === Liệt kê file tải về ===
