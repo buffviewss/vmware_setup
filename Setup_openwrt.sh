@@ -20,7 +20,16 @@ fi
 # LAN 192.168.50.1/24 (bridge br-lan)
 uci set network.lan.device='br-lan'
 uci set network.lan.proto='static'
-uci set network.lan.ipaddr='192.168.50.1'
+
+
+# Random subnet từ 10–250
+RAND_SUBNET=$((RANDOM % 241 + 10))
+LAN_IP="192.168.${RAND_SUBNET}.1"
+uci set network.lan.ipaddr="$LAN_IP"
+
+
+
+# uci set network.lan.ipaddr='192.168.50.1'
 uci set network.lan.netmask='255.255.255.0'
 uci commit network
 /etc/init.d/network restart
