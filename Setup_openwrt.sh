@@ -22,9 +22,10 @@ uci set network.lan.device='br-lan'
 uci set network.lan.proto='static'
 
 
-# Random subnet từ 10–250
-RAND_SUBNET=$((RANDOM % 241 + 10))
-LAN_IP="192.168.${RAND_SUBNET}.1"
+# Random subnet 10.X.Y.1
+OCTET2=$((RANDOM % 254 + 1))
+OCTET3=$((RANDOM % 254 + 1))
+LAN_IP="10.${OCTET2}.${OCTET3}.1"
 uci set network.lan.ipaddr="$LAN_IP"
 
 
