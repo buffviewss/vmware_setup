@@ -52,7 +52,7 @@ Mở terminal mới và chạy lệnh tương ứng (đảm bảo file [.qcow2](
 
 **Cho Tahoe:** `sudo qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -drive file=/home/luka-doncic/Downloads/Tahoe/kwrt-tahoe.qcow2,format=qcow2 -netdev bridge,id=lan,br=br-lan-tahoe -device virtio-net-pci,netdev=lan -netdev bridge,id=wan,br=br-wan -device virtio-net-pci,netdev=wan -display none -daemonize`
 
-**Cho Sonoma:** `sudo qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -drive file=/home/luka-doncic/Downloads/kwrt.qcow2,format=qcow2 -netdev bridge,id=lan,br=br-sonoma -device virtio-net-pci,netdev=lan -netdev bridge,id=wan,br=br-wan -device virtio-net-pci,netdev=wan -display none -daemonize`
+**Cho Sonoma:** `sudo qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -drive file=/home/luka-doncic/Downloads/kwrt.qcow2,format=qcow2 -netdev bridge,id=lan,br=br-sonoma -device virtio-net-pci,netdev=lan,mac=52:54:00:01:00:01 -netdev bridge,id=wan,br=br-wan -device virtio-net-pci,netdev=wan,mac=52:54:00:01:00:02 -display none -daemonize`
 
 ---
 
