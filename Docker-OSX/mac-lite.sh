@@ -172,6 +172,39 @@ killall NotificationCenter 2>/dev/null
 
 echo "Widgets disabled"
 
+# ----------------------------------------------------------
+# Disable Apple Knowledge Graph / Siri suggestions
+# ----------------------------------------------------------
+# knowledge-agent -> Apple Knowledge Graph suggestion engine
+# Used by Siri / Spotlight suggestions
+
+if launchctl print gui/$USER_ID/com.apple.knowledge-agent >/dev/null 2>&1; then
+    echo "Disabling knowledge-agent..."
+    launchctl bootout gui/$USER_ID /System/Library/LaunchAgents/com.apple.knowledge-agent.plist 2>/dev/null
+    launchctl disable gui/$USER_ID/com.apple.knowledge-agent 2>/dev/null
+fi
+
+killall knowledge-agent 2>/dev/null
+
+echo "knowledge-agent disabled"
+
+
+# ----------------------------------------------------------
+# Disable Core Spotlight daemon
+# ----------------------------------------------------------
+# corespotlightd -> Core Spotlight indexing service
+# Used for app search / system indexing
+
+if launchctl print system/com.apple.corespotlightd >/dev/null 2>&1; then
+    echo "Disabling corespotlightd..."
+    sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.corespotlightd.plist 2>/dev/null
+    sudo launchctl disable system/com.apple.corespotlightd 2>/dev/null
+fi
+
+sudo killall corespotlightd 2>/dev/null
+
+echo "corespotlightd disabled"
+
 
 echo ""
 echo "==========================================="
