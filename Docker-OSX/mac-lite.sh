@@ -8,7 +8,8 @@
 
 echo "Starting macOS persistent optimization..."
 
-UID=$(id -u)
+USER_ID=$(id -u)
+
 
 disable_system_service () {
 SERVICE=$1
