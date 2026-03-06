@@ -1,135 +1,159 @@
 #!/bin/bash
 
 # ==========================================================
-# macOS Lite Optimization Script
-# Disable non-essential background services
-# SAFE for:
-# - Safari browsing
-# - Website fingerprinting (WebGL, Canvas, Fonts)
+# macOS Lite Optimization (Persistent Disable)
+# These services remain disabled after reboot
+# SAFE FOR:
+# - Safari
+# - WebGL / Canvas fingerprint
 # - iCloud
 # - Apple ID login
 # ==========================================================
 
-echo "Starting macOS background service optimization..."
+echo "Starting persistent macOS optimization..."
+
+UID=$(id -u)
 
 # ----------------------------------------------------------
-# Disable Siri & voice assistant services
+# Disable Siri services
 # ----------------------------------------------------------
-# assistantd        -> Core Siri daemon
-# SiriNCService     -> Siri notification center integration
-# suggestd          -> Siri suggestions / Spotlight suggestions
+# assistantd -> Siri core daemon
+# SiriNCService -> Siri Notification Center integration
+# suggestd -> Siri suggestions
 
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.assistantd.plist 2>/dev/null
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.SiriNCService.plist 2>/dev/null
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.suggestd.plist 2>/dev/null
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.assistantd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.assistantd
 
-echo "Siri services disabled"
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.SiriNCService.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.SiriNCService
+
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.suggestd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.suggestd
+
+echo "Siri disabled"
 
 
 # ----------------------------------------------------------
-# Disable Spotlight indexing (heavy CPU usage)
+# Disable Spotlight indexing and daemon
 # ----------------------------------------------------------
-# mds         -> Spotlight metadata server
-# mdworker    -> Metadata worker
-# mds_stores  -> Spotlight storage service
+# mds -> Spotlight metadata server
+# mds_stores -> metadata storage
+# mdworker -> indexing worker
 
 sudo mdutil -a -i off
 
-echo "Spotlight indexing disabled"
+sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.metadata.mds.plist 2>/dev/null
+sudo launchctl disable system/com.apple.metadata.mds
+
+echo "Spotlight disabled"
 
 
 # ----------------------------------------------------------
-# Disable macOS analytics & diagnostics
+# Disable Apple analytics / telemetry
 # ----------------------------------------------------------
-# analyticsd     -> Apple analytics reporting
-# diagnosticsd   -> diagnostic log reporting
+# analyticsd -> Apple usage analytics
+# diagnosticsd -> system diagnostics reporting
 
 sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.analyticsd.plist 2>/dev/null
+sudo launchctl disable system/com.apple.analyticsd
+
 sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.diagnosticsd.plist 2>/dev/null
+sudo launchctl disable system/com.apple.diagnosticsd
 
 echo "Analytics disabled"
 
 
 # ----------------------------------------------------------
-# Disable Game Center background service
+# Disable Game Center daemon
 # ----------------------------------------------------------
-# gamed -> Apple Game Center daemon
+# gamed -> Apple Game Center background service
 
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.gamed.plist 2>/dev/null
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.gamed.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.gamed
 
 echo "Game Center disabled"
 
 
 # ----------------------------------------------------------
-# Disable Photos background analysis
+# Disable Photos background AI analysis
 # ----------------------------------------------------------
-# photoanalysisd -> AI photo analysis
-# photolibraryd  -> Photo library management
-# mediaanalysisd -> Video/photo content analysis
+# photoanalysisd -> image AI analysis
+# photolibraryd -> photo library manager
+# mediaanalysisd -> video analysis
 
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.photoanalysisd.plist 2>/dev/null
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.photolibraryd.plist 2>/dev/null
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.mediaanalysisd.plist 2>/dev/null
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.photoanalysisd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.photoanalysisd
+
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.photolibraryd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.photolibraryd
+
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.mediaanalysisd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.mediaanalysisd
 
 echo "Photos analysis disabled"
 
 
 # ----------------------------------------------------------
-# Disable AirPlay & file sharing helpers
+# Disable AirDrop / AirPlay helpers
 # ----------------------------------------------------------
-# sharingd          -> AirDrop / sharing service
-# AirPlayXPCHelper  -> AirPlay background helper
+# sharingd -> AirDrop / device sharing
+# AirPlayXPCHelper -> AirPlay background service
 
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.sharingd.plist 2>/dev/null
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.AirPlayXPCHelper.plist 2>/dev/null
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.sharingd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.sharingd
 
-echo "AirDrop / AirPlay services disabled"
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.AirPlayXPCHelper.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.AirPlayXPCHelper
+
+echo "AirDrop / AirPlay disabled"
 
 
 # ----------------------------------------------------------
-# Disable Handoff / Continuity features
+# Disable Handoff (device continuity)
 # ----------------------------------------------------------
-# handoffd -> Apple device handoff service
+# handoffd -> Apple device handoff
 
-launchctl bootout gui/$(id -u) /System/Library/LaunchAgents/com.apple.handoffd.plist 2>/dev/null
+launchctl bootout gui/$UID /System/Library/LaunchAgents/com.apple.handoffd.plist 2>/dev/null
+launchctl disable gui/$UID/com.apple.handoffd
 
 echo "Handoff disabled"
 
 
 # ----------------------------------------------------------
-# Disable automatic software update background checks
+# Disable automatic macOS update service
 # ----------------------------------------------------------
-# softwareupdated -> macOS update background service
+# softwareupdated -> background update checks
 
 sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.softwareupdated.plist 2>/dev/null
+sudo launchctl disable system/com.apple.softwareupdated
 
-echo "Automatic updates disabled"
+echo "Software update disabled"
 
 
 # ----------------------------------------------------------
-# Disable Bluetooth daemon (optional)
+# Disable Bluetooth daemon
 # ----------------------------------------------------------
-# bluetoothd -> Bluetooth device management
+# bluetoothd -> bluetooth device manager
 
 sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.bluetoothd.plist 2>/dev/null
+sudo launchctl disable system/com.apple.bluetoothd
 
-echo "Bluetooth daemon disabled"
+echo "Bluetooth disabled"
 
 
 # ----------------------------------------------------------
-# Disable widget suggestions & dashboard services
+# Disable widgets
 # ----------------------------------------------------------
-# NotificationCenter widgets
 
 defaults write com.apple.notificationcenterui widgets-enabled -bool false
-
 killall NotificationCenter 2>/dev/null
 
 echo "Widgets disabled"
 
 
 echo ""
-echo "==============================================="
-echo "macOS optimization completed"
-echo "Safari, iCloud and Apple ID remain unaffected"
-echo "==============================================="
+echo "======================================"
+echo "Persistent optimization complete"
+echo "Services will remain disabled after reboot"
+echo "Safari / iCloud / Apple ID unaffected"
+echo "======================================"
