@@ -10,14 +10,13 @@ echo "Starting macOS persistent optimization..."
 
 USER_ID=$(id -u)
 
-
 disable_system_service () {
 SERVICE=$1
 PLIST=$2
 
 if launchctl print system/$SERVICE >/dev/null 2>&1; then
 echo "Disabling system service: $SERVICE"
-sudo launchctl bootout system $PLIST 2>/dev/null
+sudo launchctl bootout system "$PLIST" 2>/dev/null
 sudo launchctl disable system/$SERVICE 2>/dev/null
 fi
 }
@@ -28,7 +27,7 @@ PLIST=$2
 
 if launchctl print gui/$USER_ID/$SERVICE >/dev/null 2>&1; then
 echo "Disabling user service: $SERVICE"
-launchctl bootout gui/$USER_ID $PLIST 2>/dev/null
+launchctl bootout gui/$USER_ID "$PLIST" 2>/dev/null
 launchctl disable gui/$USER_ID/$SERVICE 2>/dev/null
 fi
 }
@@ -52,6 +51,18 @@ echo "Siri disabled"
 
 
 # ----------------------------------------------------------
+# Disable Apple Knowledge Graph (Siri / Spotlight suggestions)
+# ----------------------------------------------------------
+
+disable_gui_service com.apple.knowledge-agent \
+/System/Library/LaunchAgents/com.apple.knowledge-agent.plist
+
+killall knowledge-agent 2>/dev/null
+
+echo "knowledge-agent disabled"
+
+
+# ----------------------------------------------------------
 # Disable Spotlight completely
 # ----------------------------------------------------------
 
@@ -65,6 +76,18 @@ killall mds_stores 2>/dev/null
 killall mdworker 2>/dev/null
 
 echo "Spotlight disabled"
+
+
+# ----------------------------------------------------------
+# Disable Core Spotlight daemon
+# ----------------------------------------------------------
+
+disable_system_service com.apple.corespotlightd \
+/System/Library/LaunchDaemons/com.apple.corespotlightd.plist
+
+killall corespotlightd 2>/dev/null
+
+echo "Core Spotlight disabled"
 
 
 # ----------------------------------------------------------
@@ -171,39 +194,6 @@ defaults write com.apple.notificationcenterui widgets-enabled -bool false
 killall NotificationCenter 2>/dev/null
 
 echo "Widgets disabled"
-
-# ----------------------------------------------------------
-# Disable Apple Knowledge Graph / Siri suggestions
-# ----------------------------------------------------------
-# knowledge-agent -> Apple Knowledge Graph suggestion engine
-# Used by Siri / Spotlight suggestions
-
-if launchctl print gui/$USER_ID/com.apple.knowledge-agent >/dev/null 2>&1; then
-    echo "Disabling knowledge-agent..."
-    launchctl bootout gui/$USER_ID /System/Library/LaunchAgents/com.apple.knowledge-agent.plist 2>/dev/null
-    launchctl disable gui/$USER_ID/com.apple.knowledge-agent 2>/dev/null
-fi
-
-killall knowledge-agent 2>/dev/null
-
-echo "knowledge-agent disabled"
-
-
-# ----------------------------------------------------------
-# Disable Core Spotlight daemon
-# ----------------------------------------------------------
-# corespotlightd -> Core Spotlight indexing service
-# Used for app search / system indexing
-
-if launchctl print system/com.apple.corespotlightd >/dev/null 2>&1; then
-    echo "Disabling corespotlightd..."
-    sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.corespotlightd.plist 2>/dev/null
-    sudo launchctl disable system/com.apple.corespotlightd 2>/dev/null
-fi
-
-sudo killall corespotlightd 2>/dev/null
-
-echo "corespotlightd disabled"
 
 
 echo ""
