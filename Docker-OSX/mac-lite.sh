@@ -26,10 +26,10 @@ disable_gui_service () {
 SERVICE=$1
 PLIST=$2
 
-if launchctl print gui/$UID/$SERVICE >/dev/null 2>&1; then
+if launchctl print gui/$USER_ID/$SERVICE >/dev/null 2>&1; then
 echo "Disabling user service: $SERVICE"
-launchctl bootout gui/$UID $PLIST 2>/dev/null
-launchctl disable gui/$UID/$SERVICE 2>/dev/null
+launchctl bootout gui/$USER_ID $PLIST 2>/dev/null
+launchctl disable gui/$USER_ID/$SERVICE 2>/dev/null
 fi
 }
 
