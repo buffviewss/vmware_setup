@@ -49,7 +49,6 @@ killall assistantd 2>/dev/null
 
 echo "Siri disabled"
 
-
 # ----------------------------------------------------------
 # Disable Apple Knowledge Graph (Siri / Spotlight suggestions)
 # ----------------------------------------------------------
@@ -57,7 +56,11 @@ echo "Siri disabled"
 disable_gui_service com.apple.knowledge-agent \
 /System/Library/LaunchAgents/com.apple.knowledge-agent.plist
 
+launchctl bootout gui/$USER_ID /System/Library/LaunchAgents/com.apple.knowledge-agent.plist 2>/dev/null
+launchctl disable gui/$USER_ID/com.apple.knowledge-agent 2>/dev/null
+
 killall knowledge-agent 2>/dev/null
+killall siriknowledged 2>/dev/null
 
 echo "knowledge-agent disabled"
 
@@ -85,7 +88,10 @@ echo "Spotlight disabled"
 disable_system_service com.apple.corespotlightd \
 /System/Library/LaunchDaemons/com.apple.corespotlightd.plist
 
-killall corespotlightd 2>/dev/null
+sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.corespotlightd.plist 2>/dev/null
+sudo launchctl disable system/com.apple.corespotlightd 2>/dev/null
+
+sudo killall corespotlightd 2>/dev/null
 
 echo "Core Spotlight disabled"
 
