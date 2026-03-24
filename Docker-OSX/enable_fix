@@ -1,0 +1,11 @@
+launchctl enable gui/$UID/com.apple.knowledge-agent
+launchctl bootstrap gui/$UID /System/Library/LaunchAgents/com.apple.knowledge-agent.plist
+
+sudo launchctl enable system/com.apple.corespotlightd
+sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.corespotlightd.plist
+
+sudo launchctl enable system/com.apple.metadata.mds
+sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.metadata.mds.plist
+
+launchctl enable gui/$UID/com.apple.sharingd
+launchctl bootstrap gui/$UID /System/Library/LaunchAgents/com.apple.sharingd.plist
